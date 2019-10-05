@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "*.psharp": "csharp",
+        "*.cu": "c"
+    }
+}
