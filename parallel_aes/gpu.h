@@ -19,8 +19,8 @@ namespace PAES {
 		__host__ void encrypt_ecb(const AESType& flavor, uint8_t * key, uint8_t * data, uint32_t datalen);
 		__host__ void decrypt_ecb(const AESType& flavor, uint8_t * key, uint8_t * data, uint32_t datalen);
 
-		__host__ void encrypt_ctr(const AESType& flavor, uint8_t * key, uint32_t ctr, uint8_t * data, uint32_t datalen);
-		__host__ void decrypt_ctr(const AESType& flavor, uint8_t * key, uint32_t ctr, uint8_t * data, uint32_t datalen);
+		__host__ void encrypt_ctr(const AESType& flavor, uint8_t * key, uint8_t * ctr, uint8_t * data, uint32_t datalen);
+		__host__ void decrypt_ctr(const AESType& flavor, uint8_t * key, uint8_t * ctr, uint8_t * data, uint32_t datalen);
 
 		// COre encyrption functions
 		// These are the calls that tie everything together.
@@ -28,7 +28,7 @@ namespace PAES {
 		__host__ void core_decrypt(uint8_t* data, const uint8_t* key, const int num_rounds);
 
 		// Expands the input key
-		__host__ void expandKey(uint8_t* ogkey, uint8_t* expkey, uint32_t keysize, uint32_t num_rounds);
+		__host__ void expandKey(const AESType& flavor, uint8_t* ogkey, uint8_t* expkey, uint32_t keysize, uint32_t num_rounds);
 
 		// add_round_key - XOR each byte of state with a byte from the key.
 		__host__  void add_round_key(uint8_t round, uint8_t* data, const uint8_t* key);

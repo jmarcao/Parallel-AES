@@ -72,7 +72,7 @@ namespace PAES {
 
 			// Expand the key
 			uint8_t* expkey = (uint8_t*)malloc(get_exp_key_len(flavor));
-			expandKey(key, expkey, get_key_len(flavor), get_num_rounds(flavor));
+			expandKey(flavor, key, expkey, get_key_len(flavor), get_num_rounds(flavor));
 
 			// Do the actual encryption inplace.
 			for (uint32_t i = 0; i < datalen; i += BLOCKSIZE) {
@@ -88,7 +88,7 @@ namespace PAES {
 
 			// Expand the key
 			uint8_t* expkey = (uint8_t*)malloc(get_exp_key_len(flavor));
-			expandKey(key, expkey, get_key_len(flavor), get_num_rounds(flavor));
+			expandKey(flavor, key, expkey, get_key_len(flavor), get_num_rounds(flavor));
 
 			// Do the actual decryption inplace.
 			for (uint32_t i = 0; i < datalen; i += BLOCKSIZE) {
@@ -96,12 +96,50 @@ namespace PAES {
 			}
 		}
 
-		void encrypt_ctr(const AESType& flavor, uint8_t * key, uint32_t ctr, uint8_t * data, uint32_t datalen)
+		void encrypt_ctr(const AESType& flavor, uint8_t * key, uint8_t * ctr, uint8_t * data, uint32_t datalen)
 		{
+			// In counter mode, we don't actually encrypt the data.
+			// Instead, we encrypt a counter value and then xor it with the data.
+			// We use an IV to create our counter and then increment the counter for
+			// each block encrypted.
+			// CTR/IV is one block size.
+			uint8_t encctr[BLOCKSIZE];
+
+			assert(mod16(datalen) == 0);
+
+			// Expand the key
+			uint8_t* expkey = (uint8_t*)malloc(get_exp_key_len(flavor));
+			expandKey(flavor, key, expkey, get_key_len(flavor), get_num_rounds(flavor));
+
+			// Do the actual encryption inplace.
+			for (uint32_t i = 0; i < datalen; i += BLOCKSIZE) {
+				// Copy the counter into our buffer and encrypt it
+				memcpy(encctr, ctr, BLOCKSIZE);
+				core_encrypt(encctr, expkey, get_num_rounds(flavor));
+
+				// XOR the encrypted counter with our data
+				for (int j = 0; j < BLOCKSIZE; j++) {
+					data[i + j] = data[i + j] ^ encctr[j];
+				}
+
+				// Increment the counter and handle any overflows
+				for (int b = BLOCKSIZE - 1; b >= 0; b--)
+				{
+					if (ctr[b] == 255)
+					{
+						ctr[b] = 0;
+						continue;
+					}
+					ctr[b] += 1;
+					break;
+				}
+			}
 		}
 
-		void decrypt_ctr(const AESType& flavor, uint8_t * key, uint32_t ctr, uint8_t * data, uint32_t datalen)
+		void decrypt_ctr(const AESType& flavor, uint8_t * key, uint8_t * ctr, uint8_t * data, uint32_t datalen)
 		{
+			// A convienent feature of CTR mode... decryption is the SAME operation! No inverse needed!
+			encrypt_ctr(flavor, key, ctr, data, datalen);
 		}
 
 		__host__ void rot_word(uint8_t* n) {
@@ -123,7 +161,7 @@ namespace PAES {
 			n[3] = sbox[n[3]];
 		}
 
-		__host__ void expandKey(uint8_t* ogkey, uint8_t* expkey, uint32_t keysize, uint32_t num_rounds) {
+		__host__ void expandKey(const AESType& flavor, uint8_t* ogkey, uint8_t* expkey, uint32_t keysize, uint32_t num_rounds) {
 			// The AES key will either be 128, 192, or 256 bits.
 			// The AES algorithm itself is not actually modified by the key size, but the number
 			// of rounds is. In expandKey() we take the provided key and stretch it out to create enough
@@ -166,7 +204,8 @@ namespace PAES {
 					sub_word(tmp); // Substitute...
 					tmp[0] = tmp[0] ^ roundcon[i / N]; // Apply round coefficient
 				}
-				else if (i % N == 4) {
+				// Next step is only done if in AES256 mode
+				else if (flavor == AESType::AES256 && (i % N == 4)) {
 					sub_word(tmp); // Just subsitute
 				}
 
@@ -220,7 +259,7 @@ namespace PAES {
 
 			// Initial Round Key Addition
 			// Each byte of the state is combined with a block of the round key using bitwise xor
-			add_round_key(0, data, key);
+			add_round_key(num_rounds, data, key);
 
 			// We perform the next steps for a number of rounds
 			// dependent on the flavor of AES.
@@ -325,14 +364,14 @@ namespace PAES {
 			// row0 -- No Shift
 			// rows 1 to 3, shift right (since we inv) by row ammount
 			for (int row = 1; row < N_ROWS; row++) {
-				tmp[0] = data[row * N_COLS + 0];
-				tmp[1] = data[row * N_COLS + 1];
-				tmp[2] = data[row * N_COLS + 2];
-				tmp[3] = data[row * N_COLS + 3];
-				data[row * N_COLS + 0] = tmp[mod4(0 + 4 - row)];
-				data[row * N_COLS + 1] = tmp[mod4(1 + 4 - row)];
-				data[row * N_COLS + 2] = tmp[mod4(2 + 4 - row)];
-				data[row * N_COLS + 3] = tmp[mod4(3 + 4 - row)];
+				tmp[0] = data[row + N_COLS * 0];
+				tmp[1] = data[row + N_COLS * 1];
+				tmp[2] = data[row + N_COLS * 2];
+				tmp[3] = data[row + N_COLS * 3];
+				data[row + N_COLS * 0] = tmp[mod4(0 + 4 - row)];
+				data[row + N_COLS * 1] = tmp[mod4(1 + 4 - row)];
+				data[row + N_COLS * 2] = tmp[mod4(2 + 4 - row)];
+				data[row + N_COLS * 3] = tmp[mod4(3 + 4 - row)];
 			}
 		}
 
@@ -385,10 +424,10 @@ namespace PAES {
 			*/
 
 			for (int i = 0; i < N_COLS; i++) {
-				uint8_t idx0 = 0 + N_COLS * i;
-				uint8_t idx1 = 1 + N_COLS * i;
-				uint8_t idx2 = 2 + N_COLS * i;
-				uint8_t idx3 = 3 + N_COLS * i;
+				uint8_t idx0 = i * N_COLS + 0;
+				uint8_t idx1 = i * N_COLS + 1;
+				uint8_t idx2 = i * N_COLS + 2;
+				uint8_t idx3 = i * N_COLS + 3;
 
 				// Hmmm... will compiler vectorize this as one read32?
 				uint8_t d0 = data[idx0];
