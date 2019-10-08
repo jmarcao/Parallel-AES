@@ -22,12 +22,12 @@ namespace PAES {
 		// A small helper for quick mod16, since it'll be used alot when accessing keys
 		// in sharedmem/texmem. 
 		template<typename T>
-		__host__  __forceinline__ T mod16(T n) {
+		__host__ __device__ __forceinline__ T mod16(T n) {
 			return n & 15;
 		}
 
 		template<typename T>
-		__host__  __forceinline__ T mod4(T n) {
+		__host__ __device__ __forceinline__ T mod4(T n) {
 			return n & 3;
 		}
 
@@ -74,10 +74,30 @@ namespace PAES {
 			uint8_t* expkey = (uint8_t*)malloc(get_exp_key_len(flavor));
 			expandKey(flavor, key, expkey, get_key_len(flavor), get_num_rounds(flavor));
 
-			// Do the actual encryption inplace.
-			for (uint32_t i = 0; i < datalen; i += BLOCKSIZE) {
-				core_encrypt(&data[i], expkey, get_num_rounds(flavor));
-			}
+			// Copy key to device memory
+			uint8_t* d_expkey;
+			cudaMalloc(&d_expkey, get_exp_key_len(flavor));
+			cudaMemcpy(d_expkey, expkey, get_exp_key_len(flavor), cudaMemcpyHostToDevice);
+
+			// Copy data to device memory
+			uint8_t* d_data;
+			cudaMalloc(&d_data, sizeof(uint8_t) * datalen);
+			cudaMemcpy(d_data, data, sizeof(uint8_t) * datalen, cudaMemcpyHostToDevice);
+
+			// Calculate number of kernels needed
+			int blocks = datalen / BLOCKSIZE;
+			int threads = blocks;
+
+			// Call the kernels to get to work!
+			core_encrypt << <1, threads >> > (d_data, d_expkey, get_num_rounds(flavor));
+			cudaDeviceSynchronize();
+
+			// Retrieve the data from the device
+			cudaMemcpy(data, d_data, sizeof(uint8_t) * datalen, cudaMemcpyDeviceToHost);
+
+			// Free CUDA memory
+			cudaFree(d_data);
+			cudaFree(d_expkey);
 		}
 
 		__host__ void decrypt_ecb(const AESType& flavor, uint8_t * key, uint8_t * data, uint32_t datalen)
@@ -85,15 +105,36 @@ namespace PAES {
 			// Straightforward, nothing fancy is done here.
 			// ECB is inherently insecure because it does not diffuse the data
 			assert(mod16(datalen) == 0);
+			assert(mod16(datalen) == 0);
 
 			// Expand the key
 			uint8_t* expkey = (uint8_t*)malloc(get_exp_key_len(flavor));
 			expandKey(flavor, key, expkey, get_key_len(flavor), get_num_rounds(flavor));
 
-			// Do the actual decryption inplace.
-			for (uint32_t i = 0; i < datalen; i += BLOCKSIZE) {
-				core_decrypt(&data[i], expkey, get_num_rounds(flavor));
-			}
+			// Copy key to device memory
+			uint8_t* d_expkey;
+			cudaMalloc(&d_expkey, get_exp_key_len(flavor));
+			cudaMemcpy(d_expkey, expkey, get_exp_key_len(flavor), cudaMemcpyHostToDevice);
+
+			// Copy data to device memory
+			uint8_t* d_data;
+			cudaMalloc(&d_data, sizeof(uint8_t) * datalen);
+			cudaMemcpy(d_data, data, sizeof(uint8_t) * datalen, cudaMemcpyHostToDevice);
+
+			// Calculate number of kernels needed
+			int blocks = datalen / BLOCKSIZE;
+			int threads = blocks;
+
+			// Call the kernels to get to work!
+			core_decrypt << <1, threads >> > (d_data, d_expkey, get_num_rounds(flavor));
+			cudaDeviceSynchronize();
+
+			// Retrieve the data from the device
+			cudaMemcpy(data, d_data, sizeof(uint8_t) * datalen, cudaMemcpyDeviceToHost);
+
+			// Free CUDA memory
+			cudaFree(d_data);
+			cudaFree(d_expkey);
 		}
 
 		void encrypt_ctr(const AESType& flavor, uint8_t * key, uint8_t * ctr, uint8_t * data, uint32_t datalen)
@@ -115,7 +156,7 @@ namespace PAES {
 			for (uint32_t i = 0; i < datalen; i += BLOCKSIZE) {
 				// Copy the counter into our buffer and encrypt it
 				memcpy(encctr, ctr, BLOCKSIZE);
-				core_encrypt(encctr, expkey, get_num_rounds(flavor));
+				//core_encrypt(encctr, expkey, get_num_rounds(flavor));
 
 				// XOR the encrypted counter with our data
 				for (int j = 0; j < BLOCKSIZE; j++) {
@@ -155,10 +196,10 @@ namespace PAES {
 		__host__ void sub_word(uint8_t* n) {
 			// SubWord() is a function that takes a four-byte input word and 
 			// applies the S-box to each of the four bytes to produce an output word.
-			n[0] = sbox[n[0]];
-			n[1] = sbox[n[1]];
-			n[2] = sbox[n[2]];
-			n[3] = sbox[n[3]];
+			n[0] = h_sbox[n[0]];
+			n[1] = h_sbox[n[1]];
+			n[2] = h_sbox[n[2]];
+			n[3] = h_sbox[n[3]];
 		}
 
 		__host__ void expandKey(const AESType& flavor, uint8_t* ogkey, uint8_t* expkey, uint32_t keysize, uint32_t num_rounds) {
@@ -218,9 +259,14 @@ namespace PAES {
 			}
 		}
 
-		 __host__ void core_encrypt(uint8_t* data, const uint8_t* key, const int num_rounds) {
+		 __global__ void core_encrypt(uint8_t* data, const uint8_t* key, const int num_rounds) {
 			// Lenght of buffer is ALWAYS 128 bits == 16 bytes
 			// This is defined by AES Algorithm
+			uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+			// Each thread running this function will act on ONE block in memory.
+			// (This is at least true in ECB mode, CTR mode might need its own kern.)
+			uint8_t* myData = data + idx * BLOCKSIZE;
 
 			// Lots of comments are pulled from https://en.wikipedia.org/wiki/Advanced_Encryption_Standard
 			
@@ -233,54 +279,55 @@ namespace PAES {
 
 			// Initial Round Key Addition
 			// Each byte of the state is combined with a block of the round key using bitwise xor
-			add_round_key(0, data, key);
+			add_round_key(idx, 0, myData, key);
 
 			// We perform the next steps for a number of rounds
 			// dependent on the flavor of AES.
 			// Pass this in via a context? 
 			for (int r = 1; r < num_rounds; r++) {
-				sub_bytes(data);
-				shift_rows(data);
-				mix_columns(data);
-				add_round_key(r, data, key);
+				sub_bytes(idx, myData);
+				shift_rows(idx, myData);
+				mix_columns(idx, myData);
+				add_round_key(idx, r, myData, key);
 			}
 
 			// For the last step we do NOT perform the mix_columns step.
-			sub_bytes(data);
-			shift_rows(data);
-			add_round_key(num_rounds, data, key);
+			sub_bytes(idx, myData);
+			shift_rows(idx, myData);
+			add_round_key(idx, num_rounds, myData, key);
 
 			// Encryption on this block is done, encrypted data is stored inplace.
 		}
 
-		 __host__ void core_decrypt(uint8_t* data, const uint8_t* key, const int num_rounds) {
+		 __global__ void core_decrypt(uint8_t* data, const uint8_t* key, const int num_rounds) {
 			// This performs the same steps as the encryption, but uses inverted values
 			// to recover the plaintext.
+			uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
 			// Initial Round Key Addition
 			// Each byte of the state is combined with a block of the round key using bitwise xor
-			add_round_key(num_rounds, data, key);
+			add_round_key(idx, num_rounds, data, key);
 
 			// We perform the next steps for a number of rounds
 			// dependent on the flavor of AES.
 			// This is done in the inverse compared to encryption
 			for (int r = num_rounds - 1; r > 0; r--)
 			{
-				inv_shift_rows(data);
-				inv_sub_bytes(data);
-				add_round_key(r, data, key);
-				inv_mix_columns(data);
+				inv_shift_rows(idx, data);
+				inv_sub_bytes(idx, data);
+				add_round_key(idx, r, data, key);
+				inv_mix_columns(idx, data);
 			}
 
 			// For the last step we do NOT perform the mix_columns step.
-			inv_shift_rows(data);
-			inv_sub_bytes(data);
-			add_round_key(0, data, key);
+			inv_shift_rows(idx, data);
+			inv_sub_bytes(idx, data);
+			add_round_key(idx, 0, data, key);
 
 			// Decryption on this block is done, decrypted data is stored inplace.
 		}
 
-		__host__  void add_round_key(uint8_t round, uint8_t * data, const uint8_t * key)
+		__device__ void add_round_key(int idx, uint8_t round, uint8_t * data, const uint8_t * key)
 		{
 			// Treat everything as a 1d array.
 			// Matrix representations will be helpful later on, 
@@ -295,7 +342,7 @@ namespace PAES {
 			//data[idx] ^= key[(round * SUBKEY_SIZE) + mod16(idx)];
 		}
 
-		__host__  void sub_bytes(uint8_t * data)
+		__device__ void sub_bytes(int idx, uint8_t * data)
 		{
 			uint8_t i;
 			for (i = 0; i < 16; ++i)
@@ -307,7 +354,7 @@ namespace PAES {
 			//data[idx] = sbox[data[mod16(idx)]];
 		}
 
-		__host__  void inv_sub_bytes(uint8_t * data)
+		__device__ void inv_sub_bytes(int idx, uint8_t * data)
 		{
 			uint8_t i;
 			for (i = 0; i < 16; ++i)
@@ -319,7 +366,7 @@ namespace PAES {
 			//data[idx] = rsbox[data[mod16(idx)]];
 		}
 
-		__host__  void shift_rows(uint8_t * data)
+		__device__ void shift_rows(int idx, uint8_t * data)
 		{
 			uint8_t tmp[4];
 			// This is not as simple as the previous steps. If we want to parallelize this,
@@ -353,7 +400,7 @@ namespace PAES {
 			//data[1 * N_COLS + 3] = tmp[mod4(3 + row)];
 		}
 
-		__host__  void inv_shift_rows(uint8_t * data)
+		__device__ void inv_shift_rows(int idx, uint8_t * data)
 		{
 			uint8_t tmp[4];
 			// This is not as simple as the previous steps. If we want to parallelize this,
@@ -375,7 +422,7 @@ namespace PAES {
 			}
 		}
 
-		__host__  void mix_columns(uint8_t * data)
+		__device__ void mix_columns(int idx, uint8_t * data)
 		{
 			// This is the most complicated step, but can be improved using our lookup tables.
 			// Problem is, this is going to cause all sorts of contention because we read and write across
@@ -411,7 +458,7 @@ namespace PAES {
 			// contention penalties. Probably not worth the trouble.
 		}
 
-		__host__  void inv_mix_columns(uint8_t * data)
+		__device__ void inv_mix_columns(int idx, uint8_t * data)
 		{
 			// Inverse mix columns -- This is the same procedure, but we use MORE lookup tables!
 			// The inmverse operation defines a differnt table, which will increase out total
