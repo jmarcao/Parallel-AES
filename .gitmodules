@@ -1,3 +1,6 @@
 [submodule "parallel_aes/tiny-AES-c"]
 	path = parallel_aes/tiny-AES-c
 	url = https://github.com/kokke/tiny-AES-c.git
+[submodule "src/cxxopts"]
+	path = src/cxxopts
+	url = https://github.com/jarro2783/cxxopts.git

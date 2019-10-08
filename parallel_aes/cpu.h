@@ -3,16 +3,11 @@
 #include "common.h"
 #define BLOCKSIZE 16 // Blocksize in bytes, constant for all AES
 
+using PAES::Common::AESType;
 
 namespace PAES {
 	namespace CPU {
 		PAES::Common::PerformanceTimer& timer();
-
-		enum class AESType {
-			AES128,
-			AES192,
-			AES256
-		};
 
 		// Public functions, these are the ones you want to call.
 		// Assumes data is properly aligned.

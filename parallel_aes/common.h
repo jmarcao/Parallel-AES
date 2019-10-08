@@ -32,10 +32,12 @@ inline int ilog2ceil(int x) {
 
 namespace PAES {
     namespace Common {
-        __global__ void kernMapToBoolean(int n, int *bools, const int *idata);
-
-        __global__ void kernScatter(int n, int *odata,
-                const int *idata, const int *bools, const int *indices);
+		enum class AESType {
+			AES128,
+			AES192,
+			AES256,
+			Invalid
+		};
 
 	    /**
 	    * This class is used for timing the performance
