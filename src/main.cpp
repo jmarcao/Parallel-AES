@@ -10,15 +10,17 @@
 #include "cxxopts/include/cxxopts.hpp"
 
 using PAES::Common::AESType;
+using namespace PAES;
 
 int test_cpu_aes();
 int test_gpu_aes();
 bool valid_mode(std::string s);
 AESType get_mode(std::string s);
+void run_performance_test(int data_size);
 
 int main(int argc, char* argv[]) {
-	std::string inputFile;
-	std::string outputFile;
+	std::string inputFile = "";
+	std::string outputFile = "";
 	bool test_mode = false;
 	bool performance_test = false;
 	std::string mode = "AES256";
@@ -72,6 +74,12 @@ int main(int argc, char* argv[]) {
 			test_mode = true;
 			std::cout << "Test Mode Selected: Running all tests." << std::endl;
 		}
+
+		if (result.count("performance-test"))
+		{
+			performance_test = true;
+			std::cout << "Performance Test Mode Selected: Running all tests with selected options." << std::endl;
+		}
 	}
 	catch (cxxopts::OptionException& e) {
 		std::cout << "Error parsing options: " << e.what() << std::endl;
@@ -83,6 +91,13 @@ int main(int argc, char* argv[]) {
 		test_gpu_aes();
 	}
 	else if(performance_test) {
+		if (inputFile.size() != 0) {
+			// Run performance test against the file
+		}
+		else {
+			// No input provided, run data against a currently static size, make this configurable.
+			run_performance_test(1 << 26); // 64MB
+		}
 
 	}
 	else {
@@ -608,4 +623,85 @@ AESType get_mode(std::string s)
 	}
 
 	return AESType::Invalid;
+}
+
+void run_performance_test(int data_size) {
+	auto& cputimer = CPU::timer();
+	auto& gputimer = GPU::timer();
+	uint8_t* data = (uint8_t*)malloc(data_size);
+	uint32_t dataLen = data_size;
+
+	for (int i = 0; i < dataLen; i++) {
+		data[i] = i;
+	}
+
+	// Use some bogus key. We can use this 256 sized key and just truncate for smaller modes.
+	uint8_t key[32] = { 
+		0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
+		0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4};
+	uint8_t iv[16] = { 
+		0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff};
+
+	////////////////////////////////////////////////////////////////////////////
+	// ECB on CPU
+	std::cout << "Running AES128 ECB on CPU...";
+	CPU::encrypt_ecb(AESType::AES128, key, data, dataLen);
+	std::cout << "\tTook " << cputimer.getCpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+
+	std::cout << "Running AES192 ECB on CPU...";
+	CPU::encrypt_ecb(AESType::AES192, key, data, dataLen);
+	std::cout << "\tTook " << cputimer.getCpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+
+	std::cout << "Running AES256 ECB on CPU...";
+	CPU::encrypt_ecb(AESType::AES256, key, data, dataLen);
+	std::cout << "\tTook " << cputimer.getCpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+
+	/////////////////////////////////////////////////////////////////////////////
+	// ECB on GPU
+	std::cout << "Running AES128 ECB on GPU...";
+	GPU::encrypt_ecb(AESType::AES128, key, data, dataLen);
+	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+
+	std::cout << "Running AES192 ECB on GPU...";
+	GPU::encrypt_ecb(AESType::AES192, key, data, dataLen);
+	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+
+	std::cout << "Running AES256 ECB on GPU...";
+	GPU::encrypt_ecb(AESType::AES256, key, data, dataLen);
+	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+
+
+	////////////////////////////////////////////////////////////////////////////
+	// CTR on CPU
+	std::cout << "Running AES128 CTR on CPU...";
+	CPU::encrypt_ctr(AESType::AES128, key, iv, data, dataLen);
+	std::cout << "\tTook " << cputimer.getCpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+
+	std::cout << "Running AES192 CTR on CPU...";
+	CPU::encrypt_ctr(AESType::AES192, key, iv, data, dataLen);
+	std::cout << "\tTook " << cputimer.getCpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+
+	std::cout << "Running AES256 CTR on CPU...";
+	CPU::encrypt_ctr(AESType::AES256, key, iv, data, dataLen);
+	std::cout << "\tTook " << cputimer.getCpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+
+	////////////////////////////////////////////////////////////////////////////
+	// CTR on GPU
+	std::cout << "Running AES128 CTR on GPU...";
+	GPU::encrypt_ctr(AESType::AES128, key, iv, data, dataLen);
+	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+
+	std::cout << "Running AES192 CTR on GPU...";
+	GPU::encrypt_ctr(AESType::AES192, key, iv, data, dataLen);
+	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+
+	std::cout << "Running AES256 CTR on GPU...";
+	GPU::encrypt_ctr(AESType::AES256, key, iv, data, dataLen);
+	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+
+	//for (int i = 0; i < 25; i++) {
+	//	std::cout << "Running AES256 ECB on GPU...";
+	//	GPU::encrypt_ecb(AESType::AES256, key, data, dataLen);
+	//	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+	//}
 }

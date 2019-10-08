@@ -28,10 +28,9 @@ namespace PAES {
 		// Core encyrption functions
 		// These are the calls that tie everything together.
 		// CTR and ECB are different enough to warrent unique kernels
-		__global__ void core_encrypt_ecb(uint8_t* data, const uint8_t* key, const int num_rounds);
-		__global__ void core_decrypt_ecb(uint8_t* data, const uint8_t* key, const int num_rounds);
-
-		__global__ void core_xcrypt_ctr(uint8_t* data, const uint8_t* key, const int num_rounds, const uint8_t * ctr);
+		__global__ void core_encrypt_ecb(int N, uint8_t* data, const uint8_t* key, const int num_rounds);
+		__global__ void core_decrypt_ecb(int N, uint8_t* data, const uint8_t* key, const int num_rounds);
+		__global__ void core_xcrypt_ctr(int N, uint8_t* data, const uint8_t* key, const int num_rounds, const uint8_t * ctr);
 
 		// Since each thread has to increment the counter themselves,
 		// do it in a device function.

@@ -85,12 +85,18 @@ namespace PAES {
 			cudaMemcpy(d_data, data, sizeof(uint8_t) * datalen, cudaMemcpyHostToDevice);
 
 			// Calculate number of kernels needed
-			int blocks = datalen / BLOCKSIZE;
-			int threads = blocks;
+			// We need one kernel per aes block. So we will calculate how many
+			// cuda blocks of 1024 threads we need to satisfy that
+			int threadsPerBlock = 1024;
+			int aes_blocks = datalen / BLOCKSIZE;
+			int cudaBlocks = aes_blocks + 1023 / 1024;
 
 			// Call the kernels to get to work!
-			core_encrypt_ecb << <1, threads >> > (d_data, d_expkey, get_num_rounds(flavor));
+			timer().startGpuTimer();
+			core_encrypt_ecb << <cudaBlocks, threadsPerBlock >> > (aes_blocks, d_data, d_expkey, get_num_rounds(flavor));
+			checkCUDAError("ECB Encrypt Failed!");
 			cudaDeviceSynchronize();
+			timer().endGpuTimer();
 
 			// Retrieve the data from the device
 			cudaMemcpy(data, d_data, sizeof(uint8_t) * datalen, cudaMemcpyDeviceToHost);
@@ -121,12 +127,18 @@ namespace PAES {
 			cudaMemcpy(d_data, data, sizeof(uint8_t) * datalen, cudaMemcpyHostToDevice);
 
 			// Calculate number of kernels needed
-			int blocks = datalen / BLOCKSIZE;
-			int threads = blocks;
+			// We need one kernel per aes block. So we will calculate how many
+			// cuda blocks of 1024 threads we need to satisfy that
+			int threadsPerBlock = 1024;
+			int aes_blocks = datalen / BLOCKSIZE;
+			int cudaBlocks = aes_blocks + 1023 / 1024;
 
 			// Call the kernels to get to work!
-			core_decrypt_ecb << <1, threads >> > (d_data, d_expkey, get_num_rounds(flavor));
+			timer().startGpuTimer();
+			core_decrypt_ecb << <cudaBlocks, threadsPerBlock >> > (aes_blocks, d_data, d_expkey, get_num_rounds(flavor));
+			checkCUDAError("ECB Decrypt Failed!");
 			cudaDeviceSynchronize();
+			timer().endGpuTimer();
 
 			// Retrieve the data from the device
 			cudaMemcpy(data, d_data, sizeof(uint8_t) * datalen, cudaMemcpyDeviceToHost);
@@ -167,13 +179,19 @@ namespace PAES {
 			cudaMemcpy(d_ctr, ctr, sizeof(uint8_t) * BLOCKSIZE, cudaMemcpyHostToDevice);
 
 			// Calculate number of kernels needed
-			int blocks = datalen / BLOCKSIZE;
-			int threads = blocks;
+			// We need one kernel per aes block. So we will calculate how many
+			// cuda blocks of 1024 threads we need to satisfy that
+			int threadsPerBlock = 1024;
+			int aes_blocks = datalen / BLOCKSIZE;
+			int cudaBlocks = aes_blocks + 1023 / 1024;
 
 			// Start the kernels. Each kernel will increment the counter
 			// based on their index.
-			core_xcrypt_ctr << <1, threads >> > (d_data, d_expkey, get_num_rounds(flavor), d_ctr);
+			timer().startGpuTimer();
+			core_xcrypt_ctr << <cudaBlocks, threadsPerBlock >> > (aes_blocks, d_data, d_expkey, get_num_rounds(flavor), d_ctr);
+			checkCUDAError("CTR Xcrypt Failed!");
 			cudaDeviceSynchronize();
+			timer().endGpuTimer();
 
 			// Retrieve the data from the device
 			cudaMemcpy(data, d_data, sizeof(uint8_t) * datalen, cudaMemcpyDeviceToHost);
@@ -266,10 +284,13 @@ namespace PAES {
 			}
 		}
 
-		 __global__ void core_encrypt_ecb(uint8_t* data, const uint8_t* key, const int num_rounds) {
+		 __global__ void core_encrypt_ecb(int N, uint8_t* data, const uint8_t* key, const int num_rounds) {
 			// Lenght of buffer is ALWAYS 128 bits == 16 bytes
 			// This is defined by AES Algorithm
 			uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+			if (idx >= N) {
+				return;
+			}
 
 			// Each thread running this function will act on ONE block in memory.
 			// (This is at least true in ECB mode, CTR mode might need its own kern.)
@@ -306,10 +327,13 @@ namespace PAES {
 			// Encryption on this block is done, encrypted data is stored inplace.
 		}
 
-		 __global__ void core_decrypt_ecb(uint8_t* data, const uint8_t* key, const int num_rounds) {
+		 __global__ void core_decrypt_ecb(int N, uint8_t* data, const uint8_t* key, const int num_rounds) {
 			// This performs the same steps as the encryption, but uses inverted values
 			// to recover the plaintext.
 			uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+			if (idx >= N) {
+				return;
+			}
 
 			// Each thread running this function will act on ONE block in memory.
 			// (This is at least true in ECB mode, CTR mode might need its own kern.)
@@ -338,10 +362,13 @@ namespace PAES {
 			// Decryption on this block is done, decrypted data is stored inplace.
 		}
 
-		 __global__ void core_xcrypt_ctr(uint8_t* data, const uint8_t* key, const int num_rounds, const uint8_t * ctr) {
+		 __global__ void core_xcrypt_ctr(int N, uint8_t* data, const uint8_t* key, const int num_rounds, const uint8_t * ctr) {
 			 // Lenght of buffer is ALWAYS 128 bits == 16 bytes
 			 // This is defined by AES Algorithm
 			 uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+			 if (idx >= N) {
+				 return;
+			 }
 
 			 // Each thread running this function will act on ONE block in memory.
 			 // (This is at least true in ECB mode, CTR mode might need its own kern.)

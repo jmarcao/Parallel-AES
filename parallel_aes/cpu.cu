@@ -75,9 +75,11 @@ namespace PAES {
 			expandKey(flavor, key, expkey, get_key_len(flavor), get_num_rounds(flavor));
 
 			// Do the actual encryption inplace.
+			timer().startCpuTimer();
 			for (uint32_t i = 0; i < datalen; i += BLOCKSIZE) {
 				core_encrypt(&data[i], expkey, get_num_rounds(flavor));
 			}
+			timer().endCpuTimer();
 		}
 
 		__host__ void decrypt_ecb(const AESType& flavor, uint8_t * key, uint8_t * data, uint32_t datalen)
@@ -91,9 +93,11 @@ namespace PAES {
 			expandKey(flavor, key, expkey, get_key_len(flavor), get_num_rounds(flavor));
 
 			// Do the actual decryption inplace.
+			timer().startCpuTimer();
 			for (uint32_t i = 0; i < datalen; i += BLOCKSIZE) {
 				core_decrypt(&data[i], expkey, get_num_rounds(flavor));
 			}
+			timer().endCpuTimer();
 		}
 
 		void encrypt_ctr(const AESType& flavor, uint8_t * key, uint8_t * ctr, uint8_t * data, uint32_t datalen)
@@ -111,11 +115,13 @@ namespace PAES {
 			uint8_t* expkey = (uint8_t*)malloc(get_exp_key_len(flavor));
 			expandKey(flavor, key, expkey, get_key_len(flavor), get_num_rounds(flavor));
 
+			timer().startCpuTimer();
 			// Do the actual encryption inplace.
 			for (uint32_t i = 0; i < datalen; i += BLOCKSIZE) {
 				// Copy the counter into our buffer and encrypt it
 				memcpy(encctr, ctr, BLOCKSIZE);
 				core_encrypt(encctr, expkey, get_num_rounds(flavor));
+				
 
 				// XOR the encrypted counter with our data
 				for (int j = 0; j < BLOCKSIZE; j++) {
@@ -134,6 +140,7 @@ namespace PAES {
 					break;
 				}
 			}
+			timer().endCpuTimer();
 		}
 
 		void decrypt_ctr(const AESType& flavor, uint8_t * key, uint8_t * ctr, uint8_t * data, uint32_t datalen)
