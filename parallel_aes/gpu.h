@@ -29,10 +29,17 @@ namespace PAES {
 		__host__ void sub_word(uint8_t* n);
 		__host__ void rot_word(uint8_t* n);
 
-		// COre encyrption functions
+		// Core encyrption functions
 		// These are the calls that tie everything together.
-		__global__ void core_encrypt(uint8_t* data, const uint8_t* key, const int num_rounds);
-		__global__ void core_decrypt(uint8_t* data, const uint8_t* key, const int num_rounds);
+		// CTR and ECB are different enough to warrent unique kernels
+		__global__ void core_encrypt_ecb(uint8_t* data, const uint8_t* key, const int num_rounds);
+		__global__ void core_decrypt_ecb(uint8_t* data, const uint8_t* key, const int num_rounds);
+
+		__global__ void core_xcrypt_ctr(uint8_t* data, const uint8_t* key, const int num_rounds, const uint8_t * ctr);
+
+		// Since each thread has to increment the counter themselves,
+		// do it in a device function.
+		__device__ void ctr_increment(uint8_t* ctr, int val);
 
 		// add_round_key - XOR each byte of state with a byte from the key.
 		__device__ void add_round_key(int idx, uint8_t round, uint8_t* data, const uint8_t* key);

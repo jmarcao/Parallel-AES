@@ -89,7 +89,7 @@ namespace PAES {
 			int threads = blocks;
 
 			// Call the kernels to get to work!
-			core_encrypt << <1, threads >> > (d_data, d_expkey, get_num_rounds(flavor));
+			core_encrypt_ecb << <1, threads >> > (d_data, d_expkey, get_num_rounds(flavor));
 			cudaDeviceSynchronize();
 
 			// Retrieve the data from the device
@@ -104,7 +104,6 @@ namespace PAES {
 		{
 			// Straightforward, nothing fancy is done here.
 			// ECB is inherently insecure because it does not diffuse the data
-			assert(mod16(datalen) == 0);
 			assert(mod16(datalen) == 0);
 
 			// Expand the key
@@ -126,7 +125,7 @@ namespace PAES {
 			int threads = blocks;
 
 			// Call the kernels to get to work!
-			core_decrypt << <1, threads >> > (d_data, d_expkey, get_num_rounds(flavor));
+			core_decrypt_ecb << <1, threads >> > (d_data, d_expkey, get_num_rounds(flavor));
 			cudaDeviceSynchronize();
 
 			// Retrieve the data from the device
@@ -144,37 +143,45 @@ namespace PAES {
 			// We use an IV to create our counter and then increment the counter for
 			// each block encrypted.
 			// CTR/IV is one block size.
-			uint8_t encctr[BLOCKSIZE];
-
 			assert(mod16(datalen) == 0);
 
 			// Expand the key
 			uint8_t* expkey = (uint8_t*)malloc(get_exp_key_len(flavor));
 			expandKey(flavor, key, expkey, get_key_len(flavor), get_num_rounds(flavor));
 
-			// Do the actual encryption inplace.
-			for (uint32_t i = 0; i < datalen; i += BLOCKSIZE) {
-				// Copy the counter into our buffer and encrypt it
-				memcpy(encctr, ctr, BLOCKSIZE);
-				//core_encrypt(encctr, expkey, get_num_rounds(flavor));
+			// Copy key to device memory
+			uint8_t* d_expkey;
+			cudaMalloc(&d_expkey, get_exp_key_len(flavor));
+			cudaMemcpy(d_expkey, expkey, get_exp_key_len(flavor), cudaMemcpyHostToDevice);
 
-				// XOR the encrypted counter with our data
-				for (int j = 0; j < BLOCKSIZE; j++) {
-					data[i + j] = data[i + j] ^ encctr[j];
-				}
+			// Copy data to device memory
+			uint8_t* d_data;
+			cudaMalloc(&d_data, sizeof(uint8_t) * datalen);
+			cudaMemcpy(d_data, data, sizeof(uint8_t) * datalen, cudaMemcpyHostToDevice);
 
-				// Increment the counter and handle any overflows
-				for (int b = BLOCKSIZE - 1; b >= 0; b--)
-				{
-					if (ctr[b] == 255)
-					{
-						ctr[b] = 0;
-						continue;
-					}
-					ctr[b] += 1;
-					break;
-				}
-			}
+			// Copy counter to device memroy
+			// OG ctr will be constant, each kernel reads it into its own memory
+			// and performs increments
+			uint8_t* d_ctr;
+			cudaMalloc(&d_ctr, sizeof(uint8_t) * BLOCKSIZE);
+			cudaMemcpy(d_ctr, ctr, sizeof(uint8_t) * BLOCKSIZE, cudaMemcpyHostToDevice);
+
+			// Calculate number of kernels needed
+			int blocks = datalen / BLOCKSIZE;
+			int threads = blocks;
+
+			// Start the kernels. Each kernel will increment the counter
+			// based on their index.
+			core_xcrypt_ctr << <1, threads >> > (d_data, d_expkey, get_num_rounds(flavor), d_ctr);
+			cudaDeviceSynchronize();
+
+			// Retrieve the data from the device
+			cudaMemcpy(data, d_data, sizeof(uint8_t) * datalen, cudaMemcpyDeviceToHost);
+
+			// Free CUDA memory
+			cudaFree(d_data);
+			cudaFree(d_expkey);
+			cudaFree(d_ctr);
 		}
 
 		void decrypt_ctr(const AESType& flavor, uint8_t * key, uint8_t * ctr, uint8_t * data, uint32_t datalen)
@@ -259,7 +266,7 @@ namespace PAES {
 			}
 		}
 
-		 __global__ void core_encrypt(uint8_t* data, const uint8_t* key, const int num_rounds) {
+		 __global__ void core_encrypt_ecb(uint8_t* data, const uint8_t* key, const int num_rounds) {
 			// Lenght of buffer is ALWAYS 128 bits == 16 bytes
 			// This is defined by AES Algorithm
 			uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -299,35 +306,109 @@ namespace PAES {
 			// Encryption on this block is done, encrypted data is stored inplace.
 		}
 
-		 __global__ void core_decrypt(uint8_t* data, const uint8_t* key, const int num_rounds) {
+		 __global__ void core_decrypt_ecb(uint8_t* data, const uint8_t* key, const int num_rounds) {
 			// This performs the same steps as the encryption, but uses inverted values
 			// to recover the plaintext.
 			uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
+			// Each thread running this function will act on ONE block in memory.
+			// (This is at least true in ECB mode, CTR mode might need its own kern.)
+			uint8_t* myData = data + idx * BLOCKSIZE;
+
 			// Initial Round Key Addition
 			// Each byte of the state is combined with a block of the round key using bitwise xor
-			add_round_key(idx, num_rounds, data, key);
+			add_round_key(idx, num_rounds, myData, key);
 
 			// We perform the next steps for a number of rounds
 			// dependent on the flavor of AES.
 			// This is done in the inverse compared to encryption
 			for (int r = num_rounds - 1; r > 0; r--)
 			{
-				inv_shift_rows(idx, data);
-				inv_sub_bytes(idx, data);
-				add_round_key(idx, r, data, key);
-				inv_mix_columns(idx, data);
+				inv_shift_rows(idx, myData);
+				inv_sub_bytes(idx, myData);
+				add_round_key(idx, r, myData, key);
+				inv_mix_columns(idx, myData);
 			}
 
 			// For the last step we do NOT perform the mix_columns step.
-			inv_shift_rows(idx, data);
-			inv_sub_bytes(idx, data);
-			add_round_key(idx, 0, data, key);
+			inv_shift_rows(idx, myData);
+			inv_sub_bytes(idx, myData);
+			add_round_key(idx, 0, myData, key);
 
 			// Decryption on this block is done, decrypted data is stored inplace.
 		}
 
-		__device__ void add_round_key(int idx, uint8_t round, uint8_t * data, const uint8_t * key)
+		 __global__ void core_xcrypt_ctr(uint8_t* data, const uint8_t* key, const int num_rounds, const uint8_t * ctr) {
+			 // Lenght of buffer is ALWAYS 128 bits == 16 bytes
+			 // This is defined by AES Algorithm
+			 uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+			 // Each thread running this function will act on ONE block in memory.
+			 // (This is at least true in ECB mode, CTR mode might need its own kern.)
+			 uint8_t* myData = data + idx * BLOCKSIZE;
+
+			 // Copy the counter to this kernel and increment it
+			 uint8_t myCtr[BLOCKSIZE];
+			 for (int i = 0; i < BLOCKSIZE; i++) {
+				 myCtr[i] = ctr[i];
+			 }
+			 ctr_increment(myCtr, idx);
+
+			 // Lots of comments are pulled from https://en.wikipedia.org/wiki/Advanced_Encryption_Standard
+
+			 // Above article mentions that SubBytes, ShiftRows, and MixColumns can be combined
+			 // into 16 table lookups and 12 32bit XOR operations.
+			 // If doing each block with 1 byte per thread, then each thread needs to perform
+			 // one table lookup and at most one XOR.
+			 // What are the memory implications? Can the tables be stored in RO memory to speed
+			 // up the operations? Hoho! Use texture memory???
+
+			 // Initial Round Key Addition
+			 // Each byte of the state is combined with a block of the round key using bitwise xor
+			 add_round_key(idx, 0, myCtr, key);
+
+			 // We perform the next steps for a number of rounds
+			 // dependent on the flavor of AES.
+			 // Pass this in via a context? 
+			 for (int r = 1; r < num_rounds; r++) {
+				 sub_bytes(idx, myCtr);
+				 shift_rows(idx, myCtr);
+				 mix_columns(idx, myCtr);
+				 add_round_key(idx, r, myCtr, key);
+			 }
+
+			 // For the last step we do NOT perform the mix_columns step.
+			 sub_bytes(idx, myCtr);
+			 shift_rows(idx, myCtr);
+			 add_round_key(idx, num_rounds, myCtr, key);
+
+			 // myCtr is now encrypted, xor it with our data before we leave
+			 for (int i = 0; i < BLOCKSIZE; i++) {
+				 myData[i] ^= myCtr[i];
+			 }
+		 }
+
+
+		 __device__ void ctr_increment(uint8_t * ctr, int val)
+		 {
+			 // We want to increment the counter by VAL while
+			 // avoiding as much divergence as possible.
+			 // There will be SOME divergence, but hopefully minimal.
+			 int remaining = val;
+			 for (int b = BLOCKSIZE - 1; b >= 0 && remaining > 0; b--)
+			 {
+				 if (ctr[b] == 255)
+				 {
+					 ctr[b] = 0;
+					 continue;
+				 }
+				 int added = __min(remaining, 255 - ctr[b]);
+				 ctr[b] += added;
+				 remaining -= added;
+			 }
+		 }
+
+		 __device__ void add_round_key(int idx, uint8_t round, uint8_t * data, const uint8_t * key)
 		{
 			// Treat everything as a 1d array.
 			// Matrix representations will be helpful later on, 
