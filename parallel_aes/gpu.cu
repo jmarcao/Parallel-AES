@@ -291,14 +291,14 @@ namespace PAES {
 			// row0 -- No Shift
 			// rows 1 to 3, shift left by row ammount
 			for (int row = 1; row < N_ROWS; row++) {
-				tmp[0] = data[row * N_COLS + 0];
-				tmp[1] = data[row * N_COLS + 1];
-				tmp[2] = data[row * N_COLS + 2];
-				tmp[3] = data[row * N_COLS + 3];
-				data[row * N_COLS + 0] = tmp[mod4(0 + row)];
-				data[row * N_COLS + 1] = tmp[mod4(1 + row)];
-				data[row * N_COLS + 2] = tmp[mod4(2 + row)];
-				data[row * N_COLS + 3] = tmp[mod4(3 + row)];
+				tmp[0] = data[row + N_COLS * 0];
+				tmp[1] = data[row + N_COLS * 1];
+				tmp[2] = data[row + N_COLS * 2];
+				tmp[3] = data[row + N_COLS * 3];
+				data[row + N_COLS * 0] = tmp[mod4(0 + row)];
+				data[row + N_COLS * 1] = tmp[mod4(1 + row)];
+				data[row + N_COLS * 2] = tmp[mod4(2 + row)];
+				data[row + N_COLS * 3] = tmp[mod4(3 + row)];
 			}
 
 			// Parallelize
@@ -351,10 +351,10 @@ namespace PAES {
 			// logic adapted from https://www.youtube.com/watch?v=bERjYzLqAfw
 			
 			for (int i = 0; i < N_COLS; i++) {
-				uint8_t idx0 = 0 + N_COLS * i;
-				uint8_t idx1 = 1 + N_COLS * i;
-				uint8_t idx2 = 2 + N_COLS * i;
-				uint8_t idx3 = 3 + N_COLS * i;
+				uint8_t idx0 = i * N_COLS + 0;
+				uint8_t idx1 = i * N_COLS + 1;
+				uint8_t idx2 = i * N_COLS + 2;
+				uint8_t idx3 = i * N_COLS + 3;
 
 				// Hmmm... will compiler vectorize this as one read32?
 				uint8_t d0 = data[idx0];

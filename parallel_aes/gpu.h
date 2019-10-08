@@ -216,8 +216,9 @@ namespace PAES {
 		// rcon values
 		// From Wiki: AES uses up to rcon10 for AES-128 (as 11 round keys are needed), 
 		// up to rcon8 for AES-192, and up to rcon7 for AES-256.
-		static const uint8_t roundcon[10] = {
-			0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36
+		// First value is never actually used.
+		static const uint8_t roundcon[11] = {
+			0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36
 		};
     }
 }
