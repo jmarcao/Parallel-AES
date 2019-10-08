@@ -15,7 +15,7 @@ void checkCUDAErrorFn(const char *msg, const char *file, int line) {
 }
 
 
-namespace StreamCompaction {
+namespace PAES {
     namespace Common {
 
         /**

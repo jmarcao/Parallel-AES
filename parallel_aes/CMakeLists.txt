@@ -3,12 +3,8 @@ set(SOURCE_FILES
     "common.cu"
     "cpu.h"
     "cpu.cu"
-    "naive.h"
-    "naive.cu"
-    "efficient.h"
-    "efficient.cu"
-    "thrust.h"
-    "thrust.cu"
+    "gpu.h"
+    "gpu.cu"
     )
 
 cuda_add_library(parallel_aes
