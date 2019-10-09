@@ -89,7 +89,7 @@ namespace PAES {
 			// cuda blocks of 1024 threads we need to satisfy that
 			int threadsPerBlock = 1024;
 			int aes_blocks = datalen / BLOCKSIZE;
-			int cudaBlocks = aes_blocks + 1023 / 1024;
+			int cudaBlocks = (aes_blocks + 1023) / 1024;
 
 			// Call the kernels to get to work!
 			timer().startGpuTimer();
@@ -131,7 +131,7 @@ namespace PAES {
 			// cuda blocks of 1024 threads we need to satisfy that
 			int threadsPerBlock = 1024;
 			int aes_blocks = datalen / BLOCKSIZE;
-			int cudaBlocks = aes_blocks + 1023 / 1024;
+			int cudaBlocks = (aes_blocks + 1023) / 1024;
 
 			// Call the kernels to get to work!
 			timer().startGpuTimer();
@@ -183,7 +183,7 @@ namespace PAES {
 			// cuda blocks of 1024 threads we need to satisfy that
 			int threadsPerBlock = 1024;
 			int aes_blocks = datalen / BLOCKSIZE;
-			int cudaBlocks = aes_blocks + 1023 / 1024;
+			int cudaBlocks = (aes_blocks + 1023) / 1024;
 
 			// Start the kernels. Each kernel will increment the counter
 			// based on their index.
