@@ -298,18 +298,18 @@ namespace PAES {
 			__shared__ uint8_t s_mul3[256];
 			// If we have enough threads, let each one do one copy.
 			if (N >= 256 && idx < 256) {
-				s_sbox[idx] = sbox[idx];
-				s_mul2[idx] = mul2[idx];
-				s_mul3[idx] = mul3[idx];
+				s_sbox[idx] = c_sbox[idx];
+				s_mul2[idx] = c_mul2[idx];
+				s_mul3[idx] = c_mul3[idx];
 			}
 			// If we don't have enough blocks, just let thread 0 do it all.
 			// If you only have 256 blocks you should be doing AES in CPU 
 			// but thats none of my business *sips tea*.
 			else if (idx == 0) {
 				for (int i = 0; i < 256; i++) {
-					s_sbox[i] = sbox[i];
-					s_mul2[i] = mul2[i];
-					s_mul3[i] = mul3[i];
+					s_sbox[i] = c_sbox[i];
+					s_mul2[i] = c_mul2[i];
+					s_mul3[i] = c_mul3[i];
 				}
 			}
 
@@ -367,22 +367,22 @@ namespace PAES {
 			__shared__ uint8_t s_mulE[256];
 			// If we have enough threads, let each one do one copy.
 			if (N >= 256 && idx < 256) {
-				s_rsbox[idx] = rsbox[idx];
-				s_mul9[idx] = mul9[idx];
-				s_mulB[idx] = mulB[idx];
-				s_mulD[idx] = mulD[idx];
-				s_mulE[idx] = mulE[idx];
+				s_rsbox[idx] = c_rsbox[idx];
+				s_mul9[idx] = c_mul9[idx];
+				s_mulB[idx] = c_mulB[idx];
+				s_mulD[idx] = c_mulD[idx];
+				s_mulE[idx] = c_mulE[idx];
 			}
 			// If we don't have enough blocks, just let thread 0 do it all.
 			// If you only have 256 blocks you should be doing AES in CPU 
 			// but thats none of my business *sips tea*.
 			else if (idx == 0) {
 				for (int i = 0; i < 256; i++) {
-					s_rsbox[i] = rsbox[i];
-					s_mul9[i] = mul9[i];
-					s_mulB[i] = mulB[i];
-					s_mulD[i] = mulD[i];
-					s_mulE[i] = mulE[i];
+					s_rsbox[i] = c_rsbox[i];
+					s_mul9[i] = c_mul9[i];
+					s_mulB[i] = c_mulB[i];
+					s_mulD[i] = c_mulD[i];
+					s_mulE[i] = c_mulE[i];
 				}
 			}
 
@@ -431,18 +431,18 @@ namespace PAES {
 
 			 // If we have enough threads, let each one do one copy.
 			 if (N >= 256 && idx < 256) {
-				 s_sbox[idx]  = sbox[idx];
-				 s_mul2[idx]  = mul2[idx];
-				 s_mul3[idx]  = mul3[idx];
+				 s_sbox[idx]  = c_sbox[idx];
+				 s_mul2[idx]  = c_mul2[idx];
+				 s_mul3[idx]  = c_mul3[idx];
 			 }
 			 // If we don't have enough blocks, just let thread 0 do it all.
 			 // If you only have 256 blocks you should be doing AES in CPU 
 			 // but thats none of my business *sips tea*.
 			 else if (idx == 0) {
 				 for (int i = 0; i < 256; i++) {
-					 s_sbox[i] = sbox[i];
-					 s_mul2[i] = mul2[i];
-					 s_mul3[i] = mul3[i];
+					 s_sbox[i] = c_sbox[i];
+					 s_mul2[i] = c_mul2[i];
+					 s_mul3[i] = c_mul3[i];
 				 }
 			 }
 
