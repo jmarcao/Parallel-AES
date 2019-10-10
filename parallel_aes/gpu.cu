@@ -148,7 +148,7 @@ namespace PAES {
 			cudaFree(d_expkey);
 		}
 
-		void encrypt_ctr(const AESType& flavor, uint8_t * key, uint8_t * ctr, uint8_t * data, uint32_t datalen)
+		__host__ void encrypt_ctr(const AESType& flavor, uint8_t * key, uint8_t * ctr, uint8_t * data, uint32_t datalen)
 		{
 			// In counter mode, we don't actually encrypt the data.
 			// Instead, we encrypt a counter value and then xor it with the data.
@@ -188,7 +188,7 @@ namespace PAES {
 			// Start the kernels. Each kernel will increment the counter
 			// based on their index.
 			timer().startGpuTimer();
-			core_xcrypt_ctr << <cudaBlocks, threadsPerBlock >> > (aes_blocks, d_data, d_expkey, get_num_rounds(flavor), d_ctr);
+			core_xcrypt_ctr << <cudaBlocks, threadsPerBlock>> > (aes_blocks, d_data, d_expkey, get_num_rounds(flavor), d_ctr);
 			checkCUDAError("CTR Xcrypt Failed!");
 			cudaDeviceSynchronize();
 			timer().endGpuTimer();
@@ -202,7 +202,7 @@ namespace PAES {
 			cudaFree(d_ctr);
 		}
 
-		void decrypt_ctr(const AESType& flavor, uint8_t * key, uint8_t * ctr, uint8_t * data, uint32_t datalen)
+		__host__ void decrypt_ctr(const AESType& flavor, uint8_t * key, uint8_t * ctr, uint8_t * data, uint32_t datalen)
 		{
 			// A convienent feature of CTR mode... decryption is the SAME operation! No inverse needed!
 			encrypt_ctr(flavor, key, ctr, data, datalen);
@@ -292,6 +292,30 @@ namespace PAES {
 				return;
 			}
 
+			// Get shared mem buffers
+			__shared__ uint8_t s_sbox[256];
+			__shared__ uint8_t s_mul2[256];
+			__shared__ uint8_t s_mul3[256];
+			// If we have enough threads, let each one do one copy.
+			if (N >= 256 && idx < 256) {
+				s_sbox[idx] = sbox[idx];
+				s_mul2[idx] = mul2[idx];
+				s_mul3[idx] = mul3[idx];
+			}
+			// If we don't have enough blocks, just let thread 0 do it all.
+			// If you only have 256 blocks you should be doing AES in CPU 
+			// but thats none of my business *sips tea*.
+			else if (idx == 0) {
+				for (int i = 0; i < 256; i++) {
+					s_sbox[i] = sbox[i];
+					s_mul2[i] = mul2[i];
+					s_mul3[i] = mul3[i];
+				}
+			}
+
+			// Wait for shared memory to load
+			__syncthreads();
+
 			// Each thread running this function will act on ONE block in memory.
 			// (This is at least true in ECB mode, CTR mode might need its own kern.)
 			uint8_t* myData = data + idx * BLOCKSIZE;
@@ -313,14 +337,14 @@ namespace PAES {
 			// dependent on the flavor of AES.
 			// Pass this in via a context? 
 			for (int r = 1; r < num_rounds; r++) {
-				sub_bytes(idx, myData);
+				sub_bytes(idx, myData, s_sbox);
 				shift_rows(idx, myData);
-				mix_columns(idx, myData);
+				mix_columns(idx, myData, s_mul2, s_mul3);
 				add_round_key(idx, r, myData, key);
 			}
 
 			// For the last step we do NOT perform the mix_columns step.
-			sub_bytes(idx, myData);
+			sub_bytes(idx, myData, s_sbox);
 			shift_rows(idx, myData);
 			add_round_key(idx, num_rounds, myData, key);
 
@@ -334,6 +358,36 @@ namespace PAES {
 			if (idx >= N) {
 				return;
 			}
+
+			// Get shared mem buffers
+			__shared__ uint8_t s_rsbox[256];
+			__shared__ uint8_t s_mul9[256];
+			__shared__ uint8_t s_mulB[256];
+			__shared__ uint8_t s_mulD[256];
+			__shared__ uint8_t s_mulE[256];
+			// If we have enough threads, let each one do one copy.
+			if (N >= 256 && idx < 256) {
+				s_rsbox[idx] = rsbox[idx];
+				s_mul9[idx] = mul9[idx];
+				s_mulB[idx] = mulB[idx];
+				s_mulD[idx] = mulD[idx];
+				s_mulE[idx] = mulE[idx];
+			}
+			// If we don't have enough blocks, just let thread 0 do it all.
+			// If you only have 256 blocks you should be doing AES in CPU 
+			// but thats none of my business *sips tea*.
+			else if (idx == 0) {
+				for (int i = 0; i < 256; i++) {
+					s_rsbox[i] = rsbox[i];
+					s_mul9[i] = mul9[i];
+					s_mulB[i] = mulB[i];
+					s_mulD[i] = mulD[i];
+					s_mulE[i] = mulE[i];
+				}
+			}
+
+			// Wait for shared memory to load
+			__syncthreads();
 
 			// Each thread running this function will act on ONE block in memory.
 			// (This is at least true in ECB mode, CTR mode might need its own kern.)
@@ -349,14 +403,14 @@ namespace PAES {
 			for (int r = num_rounds - 1; r > 0; r--)
 			{
 				inv_shift_rows(idx, myData);
-				inv_sub_bytes(idx, myData);
+				inv_sub_bytes(idx, myData, s_rsbox);
 				add_round_key(idx, r, myData, key);
-				inv_mix_columns(idx, myData);
+				inv_mix_columns(idx, myData, s_mul9, s_mulB, s_mulD, s_mulE);
 			}
 
 			// For the last step we do NOT perform the mix_columns step.
 			inv_shift_rows(idx, myData);
-			inv_sub_bytes(idx, myData);
+			inv_sub_bytes(idx, myData, s_rsbox);
 			add_round_key(idx, 0, myData, key);
 
 			// Decryption on this block is done, decrypted data is stored inplace.
@@ -369,6 +423,31 @@ namespace PAES {
 			 if (idx >= N) {
 				 return;
 			 }
+
+			 // Get shared mem buffers
+			 __shared__ uint8_t s_sbox[256];
+			 __shared__ uint8_t s_mul2[256];
+			 __shared__ uint8_t s_mul3[256];
+
+			 // If we have enough threads, let each one do one copy.
+			 if (N >= 256 && idx < 256) {
+				 s_sbox[idx]  = sbox[idx];
+				 s_mul2[idx]  = mul2[idx];
+				 s_mul3[idx]  = mul3[idx];
+			 }
+			 // If we don't have enough blocks, just let thread 0 do it all.
+			 // If you only have 256 blocks you should be doing AES in CPU 
+			 // but thats none of my business *sips tea*.
+			 else if (idx == 0) {
+				 for (int i = 0; i < 256; i++) {
+					 s_sbox[i] = sbox[i];
+					 s_mul2[i] = mul2[i];
+					 s_mul3[i] = mul3[i];
+				 }
+			 }
+
+			 // Wait for shared memory to load
+			 __syncthreads();
 
 			 // Each thread running this function will act on ONE block in memory.
 			 // (This is at least true in ECB mode, CTR mode might need its own kern.)
@@ -398,14 +477,14 @@ namespace PAES {
 			 // dependent on the flavor of AES.
 			 // Pass this in via a context? 
 			 for (int r = 1; r < num_rounds; r++) {
-				 sub_bytes(idx, myCtr);
+				 sub_bytes(idx, myCtr, s_sbox);
 				 shift_rows(idx, myCtr);
-				 mix_columns(idx, myCtr);
+				 mix_columns(idx, myCtr, s_mul2, s_mul3);
 				 add_round_key(idx, r, myCtr, key);
 			 }
 
 			 // For the last step we do NOT perform the mix_columns step.
-			 sub_bytes(idx, myCtr);
+			 sub_bytes(idx, myCtr, s_sbox);
 			 shift_rows(idx, myCtr);
 			 add_round_key(idx, num_rounds, myCtr, key);
 
@@ -450,7 +529,7 @@ namespace PAES {
 			//data[idx] ^= key[(round * SUBKEY_SIZE) + mod16(idx)];
 		}
 
-		__device__ void sub_bytes(int idx, uint8_t * data)
+		__device__ void sub_bytes(int idx, uint8_t * data, uint8_t* sbox)
 		{
 			uint8_t i;
 			for (i = 0; i < 16; ++i)
@@ -462,7 +541,7 @@ namespace PAES {
 			//data[idx] = sbox[data[mod16(idx)]];
 		}
 
-		__device__ void inv_sub_bytes(int idx, uint8_t * data)
+		__device__ void inv_sub_bytes(int idx, uint8_t * data, uint8_t* rsbox)
 		{
 			uint8_t i;
 			for (i = 0; i < 16; ++i)
@@ -530,7 +609,7 @@ namespace PAES {
 			}
 		}
 
-		__device__ void mix_columns(int idx, uint8_t * data)
+		__device__ void mix_columns(int idx, uint8_t * data, uint8_t* mul2, uint8_t* mul3)
 		{
 			// This is the most complicated step, but can be improved using our lookup tables.
 			// Problem is, this is going to cause all sorts of contention because we read and write across
@@ -566,7 +645,8 @@ namespace PAES {
 			// contention penalties. Probably not worth the trouble.
 		}
 
-		__device__ void inv_mix_columns(int idx, uint8_t * data)
+		__device__ void inv_mix_columns(int idx, uint8_t * data, 
+			uint8_t* mul9, uint8_t* mulB, uint8_t* mulD, uint8_t* mulE)
 		{
 			// Inverse mix columns -- This is the same procedure, but we use MORE lookup tables!
 			// The inmverse operation defines a differnt table, which will increase out total

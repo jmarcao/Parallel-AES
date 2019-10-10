@@ -42,8 +42,8 @@ namespace PAES {
 		// sub_bytes - Non-linear subsitituion. Each byte is replaced by another byte based on a lookup table
 		// NOTE: Could this be any area of improved performance? Definetly want this table avaible
 		// to all kernels quickly, since you cannot guess where each read will be done.
-		__device__ void sub_bytes(int idx, uint8_t* data);
-		__device__ void inv_sub_bytes(int idx, uint8_t* data);
+		__device__ void sub_bytes(int idx, uint8_t* data, uint8_t* sbox);
+		__device__ void inv_sub_bytes(int idx, uint8_t* data, uint8_t* rsbox);
 
 		// shift_rows - Shifts each row left by an offset equal to row number. So row 0 
 		// shifts 0, row 1 shifts 1, etc. Used to prevent each column from being independently decrypted
@@ -55,8 +55,9 @@ namespace PAES {
 		// mix_columns - This is, to me, the most complicated step in the process. Each column is transfomed by
 		// multiplication with a constant mat4. This can be simplified by using lookup tables! I'll implement it using both
 		// lookup tables and pure operations and compare the performance.
-		__device__ void mix_columns(int idx, uint8_t* data);
-		__device__ void inv_mix_columns(int idx, uint8_t* data);
+		__device__ void mix_columns(int idx, uint8_t* data, uint8_t* mul2, uint8_t* mul3);
+		__device__ void inv_mix_columns(int idx, uint8_t* data,
+			uint8_t* mul9, uint8_t* mulB, uint8_t* mulD, uint8_t* mulE);
 
 		// TABLES
 		// Substitution 
