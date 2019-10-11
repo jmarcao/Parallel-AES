@@ -7,7 +7,7 @@
 using PAES::Common::AESType;
 
 namespace PAES {
-    namespace GPU_NAIVE {
+    namespace GPU_OPT {
 		PAES::Common::PerformanceTimer& timer();
 
 		// Public functions, these are the ones you want to call.

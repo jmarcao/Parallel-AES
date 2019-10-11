@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <parallel_aes/cpu.h>
 #include <parallel_aes/gpu.h>
+#include <parallel_aes/gpu_opt.h>
 #include "testing_helpers.hpp"
 #include "cxxopts/include/cxxopts.hpp"
 
@@ -13,17 +14,19 @@ using PAES::Common::AESType;
 using namespace PAES;
 
 int test_cpu_aes();
-int test_gpu_aes();
-bool valid_mode(std::string s);
-AESType get_mode(std::string s);
-void run_performance_test(int data_size);
+int test_gpu_naive_aes();
+int test_gpu_opt_aes();
+void run_performance_test_cpu(int data_size);
+void run_performance_test_gpu_naive(int data_size);
+void run_performance_test_gpu_opt(int data_size);
+void pretty_bytes(char* buf, int bytes);
+int roundUp(int numToRound, int multiple);
 
 int main(int argc, char* argv[]) {
-	std::string inputFile = "";
-	std::string outputFile = "";
 	bool test_mode = false;
 	bool performance_test = false;
-	std::string mode = "AES256";
+	bool always_run_cpu = false;
+	int bytes = 0;
 
 	try {
 		cxxopts::Options options(argv[0], "parallel AES implementation tester");
@@ -34,11 +37,10 @@ int main(int argc, char* argv[]) {
 		bool apple = false;
 
 		options.add_options()
-			("i,input", "Input file to encrypt", cxxopts::value<std::string>())
-			("o,output", "Output file to write the encrypted file", cxxopts::value<std::string>())
-			("m,mode", "AES Mode to run (\"AES128\", \"AES192\", \"AES256\")", cxxopts::value<std::string>()->default_value("AES256"))
 			("t,test", "Test Mode, runs all normal test")
-			("p,performance-test", "Performance test mode, runs input file against all encryption methods")
+			("p,performance-test", "Performance test mode, runs input file against all encryption methods. Argument is size of bytes. Default 16MB.",
+				cxxopts::value<int>()->default_value("16777216"))
+			("c,always-run-cpu", "Always run CPU tests for Performance test, even if asking over 64MB")
 			("h,help", "Shows help");
 
 		auto result = options.parse(argc, argv);
@@ -49,35 +51,21 @@ int main(int argc, char* argv[]) {
 			exit(0);
 		}
 
-		if (result.count("input"))
-		{
-			inputFile = result["input"].as<std::string>();
-			std::cout << "Input = " << inputFile << std::endl;
-		}
-
-		if (result.count("output"))
-		{
-			outputFile = result["output"].as<std::string>();
-			std::cout << "Output = " << outputFile << std::endl;
-		}
-
-		if (result.count("mode"))
-		{
-			mode = result["mode"].as<std::string>();
-			if (!valid_mode(mode)) {
-				std::cout << "Invalid mode selected." << std::endl;
-			}
-		}
-
 		if (result.count("test"))
 		{
 			test_mode = true;
 			std::cout << "Test Mode Selected: Running all tests." << std::endl;
 		}
 
+		if (result.count("always-run-cpu"))
+		{
+			always_run_cpu = true;
+		}
+
 		if (result.count("performance-test"))
 		{
 			performance_test = true;
+			bytes = result["performance-test"].as<int>();
 			std::cout << "Performance Test Mode Selected: Running all tests with selected options." << std::endl;
 		}
 	}
@@ -87,21 +75,31 @@ int main(int argc, char* argv[]) {
 	}
 
 	if (test_mode) {
+		// Test AES correctness
 		test_cpu_aes();
-		test_gpu_aes();
+		test_gpu_naive_aes();
+		test_gpu_opt_aes();
 	}
 	else if(performance_test) {
-		if (inputFile.size() != 0) {
-			// Run performance test against the file
+		// Run performance test on bytes provided
+		uint32_t dataLen = roundUp(bytes, 16);
+		char bytestr[256];
+		pretty_bytes(bytestr, dataLen);
+		std::cout << "Each test operating on " << bytestr << std::endl;
+		
+		// Skip CPU test if asking for over 64MB, it just takes too long
+		// Ignored if passed '-c' argument
+		if (always_run_cpu || (dataLen < (1 << 26))) {
+			run_performance_test_cpu(dataLen);
 		}
 		else {
-			// No input provided, run data against a currently static size, make this configurable.
-			run_performance_test(1 << 26); // 64MB
+			std::cout << "\tSkipping CPU tests for times sake" << std::endl;
+			std::cout << "\tTo disable this and always run cpu tests, run with '-c' option" << std::endl;
 		}
 
-	}
-	else {
-		// Hmm...
+		// Run GPU comp
+		run_performance_test_gpu_naive(dataLen);
+		run_performance_test_gpu_opt(dataLen);
 	}
 
     system("pause"); // stop Win32 console from closing on exit
@@ -355,11 +353,11 @@ int test_cpu_aes() {
 	return ret;
 }
 
-int test_gpu_aes() {
+int test_gpu_naive_aes() {
 	// Test data from tiny-aes, works pretty nicely
 	int ret = 0;
 
-	printf("Testing GPU Algorithms...\n");
+	printf("Testing GPU Naive Algorithms...\n");
 	
 	// Test ECB
 	{
@@ -368,7 +366,7 @@ int test_gpu_aes() {
 			uint8_t key128[] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
 			uint8_t out128[] = { 0x3a, 0xd7, 0x7b, 0xb4, 0x0d, 0x7a, 0x36, 0x60, 0xa8, 0x9e, 0xca, 0xf3, 0x24, 0x66, 0xef, 0x97 };
 			uint8_t in[] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
-			PAES::GPU::encrypt_ecb(AESType::AES128, key128, in, 16);
+			PAES::GPU_NAIVE::encrypt_ecb(AESType::AES128, key128, in, 16);
 			if (0 == memcmp((char*)out128, (char*)in, 16)) {
 				printf("\tECB AES128 Encrypt Passed!\n");
 			}
@@ -384,7 +382,7 @@ int test_gpu_aes() {
 					 0x62, 0xf8, 0xea, 0xd2, 0x52, 0x2c, 0x6b, 0x7b };
 			uint8_t out192[] = { 0xbd, 0x33, 0x4f, 0x1d, 0x6e, 0x45, 0xf2, 0x5f, 0xf7, 0x12, 0xa2, 0x14, 0x57, 0x1f, 0xa5, 0xcc };
 			uint8_t in[] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
-			PAES::GPU::encrypt_ecb(AESType::AES192, key192, in, 16);
+			PAES::GPU_NAIVE::encrypt_ecb(AESType::AES192, key192, in, 16);
 			if (0 == memcmp((char*)out192, (char*)in, 16)) {
 				printf("\tECB AES192 Encrypt Passed!\n");
 			}
@@ -401,7 +399,7 @@ int test_gpu_aes() {
 			uint8_t out256[] = { 0xf3, 0xee, 0xd1, 0xbd, 0xb5, 0xd2, 0xa0, 0x3c, 0x06, 0x4b, 0x5a, 0x7e, 0x3d, 0xb1, 0x81, 0xf8 };
 			uint8_t in[] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
 
-			PAES::GPU::encrypt_ecb(AESType::AES256, key256, in, 16);
+			PAES::GPU_NAIVE::encrypt_ecb(AESType::AES256, key256, in, 16);
 			if (0 == memcmp((char*)out256, (char*)in, 16)) {
 				printf("\tECB AES256 Encrypt Passed!\n");
 			}
@@ -416,7 +414,7 @@ int test_gpu_aes() {
 			uint8_t key128[] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
 			uint8_t out128[] = { 0x3a, 0xd7, 0x7b, 0xb4, 0x0d, 0x7a, 0x36, 0x60, 0xa8, 0x9e, 0xca, 0xf3, 0x24, 0x66, 0xef, 0x97 };
 			uint8_t in[] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
-			PAES::GPU::decrypt_ecb(AESType::AES128, key128, out128, 16);
+			PAES::GPU_NAIVE::decrypt_ecb(AESType::AES128, key128, out128, 16);
 			if (0 == memcmp((char*)out128, (char*)in, 16)) {
 				printf("\tECB AES128 Decrypt Passed!\n");
 			}
@@ -432,7 +430,7 @@ int test_gpu_aes() {
 					 0x62, 0xf8, 0xea, 0xd2, 0x52, 0x2c, 0x6b, 0x7b };
 			uint8_t out192[] = { 0xbd, 0x33, 0x4f, 0x1d, 0x6e, 0x45, 0xf2, 0x5f, 0xf7, 0x12, 0xa2, 0x14, 0x57, 0x1f, 0xa5, 0xcc };
 			uint8_t in[] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
-			PAES::GPU::decrypt_ecb(AESType::AES192, key192, out192, 16);
+			PAES::GPU_NAIVE::decrypt_ecb(AESType::AES192, key192, out192, 16);
 			if (0 == memcmp((char*)out192, (char*)in, 16)) {
 				printf("\tECB AES192 Decrypt Passed!\n");
 			}
@@ -448,7 +446,7 @@ int test_gpu_aes() {
 					0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4 };
 			uint8_t out256[] = { 0xf3, 0xee, 0xd1, 0xbd, 0xb5, 0xd2, 0xa0, 0x3c, 0x06, 0x4b, 0x5a, 0x7e, 0x3d, 0xb1, 0x81, 0xf8 };
 			uint8_t in[] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
-			PAES::GPU::decrypt_ecb(AESType::AES256, key256, out256, 16);
+			PAES::GPU_NAIVE::decrypt_ecb(AESType::AES256, key256, out256, 16);
 			if (0 == memcmp((char*)out256, (char*)in, 16)) {
 				printf("\tECB AES256 Decrypt Passed!\n");
 			}
@@ -474,7 +472,7 @@ int test_gpu_aes() {
 								0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
 								0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10 };
 
-			PAES::GPU::encrypt_ctr(AESType::AES128, key128, iv, in128, 16);
+			PAES::GPU_NAIVE::encrypt_ctr(AESType::AES128, key128, iv, in128, 16);
 			if (0 == memcmp((char*)out, (char*)in128, 16)) {
 				printf("\tCTR AES128 Encrypt Passed!\n");
 			}
@@ -497,7 +495,7 @@ int test_gpu_aes() {
 								0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
 								0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10 };
 
-			PAES::GPU::encrypt_ctr(AESType::AES192, key192, iv, in192, 16);
+			PAES::GPU_NAIVE::encrypt_ctr(AESType::AES192, key192, iv, in192, 16);
 			if (0 == memcmp((char*)out, (char*)in192, 16)) {
 				printf("\tCTR AES192 Encrypt Passed!\n");
 			}
@@ -520,7 +518,7 @@ int test_gpu_aes() {
 								0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
 								0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10 };
 			
-			PAES::GPU::encrypt_ctr(AESType::AES256, key256, iv, in256, 16);
+			PAES::GPU_NAIVE::encrypt_ctr(AESType::AES256, key256, iv, in256, 16);
 			if (0 == memcmp((char*)out, (char*)in256, 16)) {
 				printf("\tCTR AES256 Encrypt Passed!\n");
 			}
@@ -543,7 +541,7 @@ int test_gpu_aes() {
 								0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
 								0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10 };
 
-			PAES::GPU::decrypt_ctr(AESType::AES128, key128, iv, out, 16);
+			PAES::GPU_NAIVE::decrypt_ctr(AESType::AES128, key128, iv, out, 16);
 			if (0 == memcmp((char*)out, (char*)in128, 16)) {
 				printf("\tCTR AES128 Decrypt Passed!\n");
 			}
@@ -566,7 +564,7 @@ int test_gpu_aes() {
 								0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
 								0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10 };
 
-			PAES::GPU::decrypt_ctr(AESType::AES192, key192, iv, out, 16);
+			PAES::GPU_NAIVE::decrypt_ctr(AESType::AES192, key192, iv, out, 16);
 			if (0 == memcmp((char*)out, (char*)in192, 16)) {
 				printf("\tCTR AES192 Decrypt Passed!\n");
 			}
@@ -589,7 +587,7 @@ int test_gpu_aes() {
 								0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
 								0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10 };
 
-			PAES::GPU::decrypt_ctr(AESType::AES256, key256, iv, out, 16);
+			PAES::GPU_NAIVE::decrypt_ctr(AESType::AES256, key256, iv, out, 16);
 			if (0 == memcmp((char*)out, (char*)in256, 16)) {
 				printf("\tCTR AES256 Decrypt Passed!\n");
 			}
@@ -603,33 +601,294 @@ int test_gpu_aes() {
 	return ret;
 }
 
-bool valid_mode(std::string s)
-{
-	return (AESType::Invalid != get_mode(s));
+int test_gpu_opt_aes() {
+	// Test data from tiny-aes, works pretty nicely
+	int ret = 0;
+
+	printf("Testing GPU Optimized Algorithms...\n");
+
+	// Test ECB
+	{
+		// Test AES128 Encrypt
+		{
+			uint8_t key128[] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
+			uint8_t out128[] = { 0x3a, 0xd7, 0x7b, 0xb4, 0x0d, 0x7a, 0x36, 0x60, 0xa8, 0x9e, 0xca, 0xf3, 0x24, 0x66, 0xef, 0x97 };
+			uint8_t in[] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
+			PAES::GPU_OPT::encrypt_ecb(AESType::AES128, key128, in, 16);
+			if (0 == memcmp((char*)out128, (char*)in, 16)) {
+				printf("\tECB AES128 Encrypt Passed!\n");
+			}
+			else {
+				printf("\tECB AES128 Encrypt Failed!\n");
+				ret = -1;
+			}
+		}
+
+		// Test AES192 Encrypt
+		{
+			uint8_t key192[] = { 0x8e, 0x73, 0xb0, 0xf7, 0xda, 0x0e, 0x64, 0x52, 0xc8, 0x10, 0xf3, 0x2b, 0x80, 0x90, 0x79, 0xe5,
+					 0x62, 0xf8, 0xea, 0xd2, 0x52, 0x2c, 0x6b, 0x7b };
+			uint8_t out192[] = { 0xbd, 0x33, 0x4f, 0x1d, 0x6e, 0x45, 0xf2, 0x5f, 0xf7, 0x12, 0xa2, 0x14, 0x57, 0x1f, 0xa5, 0xcc };
+			uint8_t in[] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
+			PAES::GPU_OPT::encrypt_ecb(AESType::AES192, key192, in, 16);
+			if (0 == memcmp((char*)out192, (char*)in, 16)) {
+				printf("\tECB AES192 Encrypt Passed!\n");
+			}
+			else {
+				printf("\tECB AES192 Encrypt Failed!\n");
+				ret = -1;
+			}
+		}
+
+		// Test AES256 Encrypt
+		{
+			uint8_t key256[] = { 0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
+					 0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4 };
+			uint8_t out256[] = { 0xf3, 0xee, 0xd1, 0xbd, 0xb5, 0xd2, 0xa0, 0x3c, 0x06, 0x4b, 0x5a, 0x7e, 0x3d, 0xb1, 0x81, 0xf8 };
+			uint8_t in[] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
+
+			PAES::GPU_OPT::encrypt_ecb(AESType::AES256, key256, in, 16);
+			if (0 == memcmp((char*)out256, (char*)in, 16)) {
+				printf("\tECB AES256 Encrypt Passed!\n");
+			}
+			else {
+				printf("\tECB AES256 Encrypt Failed!\n");
+				ret = -1;
+			}
+		}
+
+		// Test AES128 Decrypt
+		{
+			uint8_t key128[] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
+			uint8_t out128[] = { 0x3a, 0xd7, 0x7b, 0xb4, 0x0d, 0x7a, 0x36, 0x60, 0xa8, 0x9e, 0xca, 0xf3, 0x24, 0x66, 0xef, 0x97 };
+			uint8_t in[] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
+			PAES::GPU_OPT::decrypt_ecb(AESType::AES128, key128, out128, 16);
+			if (0 == memcmp((char*)out128, (char*)in, 16)) {
+				printf("\tECB AES128 Decrypt Passed!\n");
+			}
+			else {
+				printf("\tECB AES128 Decrypt Failed!\n");
+				ret = -1;
+			}
+		}
+
+		// Test AES192 Decrypt
+		{
+			uint8_t key192[] = { 0x8e, 0x73, 0xb0, 0xf7, 0xda, 0x0e, 0x64, 0x52, 0xc8, 0x10, 0xf3, 0x2b, 0x80, 0x90, 0x79, 0xe5,
+					 0x62, 0xf8, 0xea, 0xd2, 0x52, 0x2c, 0x6b, 0x7b };
+			uint8_t out192[] = { 0xbd, 0x33, 0x4f, 0x1d, 0x6e, 0x45, 0xf2, 0x5f, 0xf7, 0x12, 0xa2, 0x14, 0x57, 0x1f, 0xa5, 0xcc };
+			uint8_t in[] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
+			PAES::GPU_OPT::decrypt_ecb(AESType::AES192, key192, out192, 16);
+			if (0 == memcmp((char*)out192, (char*)in, 16)) {
+				printf("\tECB AES192 Decrypt Passed!\n");
+			}
+			else {
+				printf("\tECB AES192 Decrypt Failed!\n");
+				ret = -1;
+			}
+		}
+
+		// Test AES256 Decrypt
+		{
+			uint8_t key256[] = { 0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
+					0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4 };
+			uint8_t out256[] = { 0xf3, 0xee, 0xd1, 0xbd, 0xb5, 0xd2, 0xa0, 0x3c, 0x06, 0x4b, 0x5a, 0x7e, 0x3d, 0xb1, 0x81, 0xf8 };
+			uint8_t in[] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a };
+			PAES::GPU_OPT::decrypt_ecb(AESType::AES256, key256, out256, 16);
+			if (0 == memcmp((char*)out256, (char*)in, 16)) {
+				printf("\tECB AES256 Decrypt Passed!\n");
+			}
+			else {
+				printf("\tECB AES256 Decrypt Failed!\n");
+				ret = -1;
+			}
+		}
+	}
+
+	// Test CTR
+	{
+		// Test AES128 Encrypt
+		{
+			uint8_t key128[16] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
+			uint8_t in128[64] = { 0x87, 0x4d, 0x61, 0x91, 0xb6, 0x20, 0xe3, 0x26, 0x1b, 0xef, 0x68, 0x64, 0x99, 0x0d, 0xb6, 0xce,
+								0x98, 0x06, 0xf6, 0x6b, 0x79, 0x70, 0xfd, 0xff, 0x86, 0x17, 0x18, 0x7b, 0xb9, 0xff, 0xfd, 0xff,
+								0x5a, 0xe4, 0xdf, 0x3e, 0xdb, 0xd5, 0xd3, 0x5e, 0x5b, 0x4f, 0x09, 0x02, 0x0d, 0xb0, 0x3e, 0xab,
+								0x1e, 0x03, 0x1d, 0xda, 0x2f, 0xbe, 0x03, 0xd1, 0x79, 0x21, 0x70, 0xa0, 0xf3, 0x00, 0x9c, 0xee };
+			uint8_t iv[16] = { 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };
+			uint8_t out[64] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
+								0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c, 0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf, 0x8e, 0x51,
+								0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
+								0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10 };
+
+			PAES::GPU_OPT::encrypt_ctr(AESType::AES128, key128, iv, in128, 16);
+			if (0 == memcmp((char*)out, (char*)in128, 16)) {
+				printf("\tCTR AES128 Encrypt Passed!\n");
+			}
+			else {
+				printf("\tCTR AES128 Encrypt Failed!\n");
+				ret = -1;
+			}
+		}
+		// Test AES192 Encrypt
+		{
+			uint8_t key192[24] = { 0x8e, 0x73, 0xb0, 0xf7, 0xda, 0x0e, 0x64, 0x52, 0xc8, 0x10, 0xf3, 0x2b, 0x80, 0x90, 0x79, 0xe5,
+								0x62, 0xf8, 0xea, 0xd2, 0x52, 0x2c, 0x6b, 0x7b };
+			uint8_t in192[64] = { 0x1a, 0xbc, 0x93, 0x24, 0x17, 0x52, 0x1c, 0xa2, 0x4f, 0x2b, 0x04, 0x59, 0xfe, 0x7e, 0x6e, 0x0b,
+								0x09, 0x03, 0x39, 0xec, 0x0a, 0xa6, 0xfa, 0xef, 0xd5, 0xcc, 0xc2, 0xc6, 0xf4, 0xce, 0x8e, 0x94,
+								0x1e, 0x36, 0xb2, 0x6b, 0xd1, 0xeb, 0xc6, 0x70, 0xd1, 0xbd, 0x1d, 0x66, 0x56, 0x20, 0xab, 0xf7,
+								0x4f, 0x78, 0xa7, 0xf6, 0xd2, 0x98, 0x09, 0x58, 0x5a, 0x97, 0xda, 0xec, 0x58, 0xc6, 0xb0, 0x50 };
+			uint8_t iv[16] = { 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };
+			uint8_t out[64] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
+								0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c, 0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf, 0x8e, 0x51,
+								0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
+								0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10 };
+
+			PAES::GPU_OPT::encrypt_ctr(AESType::AES192, key192, iv, in192, 16);
+			if (0 == memcmp((char*)out, (char*)in192, 16)) {
+				printf("\tCTR AES192 Encrypt Passed!\n");
+			}
+			else {
+				printf("\tCTR AES192 Encrypt Failed!\n");
+				ret = -1;
+			}
+		}
+		// Test AES256 Encrypt
+		{
+			uint8_t key256[32] = { 0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
+					0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4 };
+			uint8_t in256[64] = { 0x60, 0x1e, 0xc3, 0x13, 0x77, 0x57, 0x89, 0xa5, 0xb7, 0xa7, 0xf5, 0x04, 0xbb, 0xf3, 0xd2, 0x28,
+								0xf4, 0x43, 0xe3, 0xca, 0x4d, 0x62, 0xb5, 0x9a, 0xca, 0x84, 0xe9, 0x90, 0xca, 0xca, 0xf5, 0xc5,
+								0x2b, 0x09, 0x30, 0xda, 0xa2, 0x3d, 0xe9, 0x4c, 0xe8, 0x70, 0x17, 0xba, 0x2d, 0x84, 0x98, 0x8d,
+								0xdf, 0xc9, 0xc5, 0x8d, 0xb6, 0x7a, 0xad, 0xa6, 0x13, 0xc2, 0xdd, 0x08, 0x45, 0x79, 0x41, 0xa6 };
+			uint8_t iv[16] = { 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };
+			uint8_t out[64] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
+								0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c, 0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf, 0x8e, 0x51,
+								0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
+								0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10 };
+
+			PAES::GPU_OPT::encrypt_ctr(AESType::AES256, key256, iv, in256, 16);
+			if (0 == memcmp((char*)out, (char*)in256, 16)) {
+				printf("\tCTR AES256 Encrypt Passed!\n");
+			}
+			else {
+				printf("\tCTR AES256 Encrypt Failed!\n");
+				ret = -1;
+			}
+		}
+
+		// Test AES128 Decrypt
+		{
+			uint8_t key128[16] = { 0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c };
+			uint8_t in128[64] = { 0x87, 0x4d, 0x61, 0x91, 0xb6, 0x20, 0xe3, 0x26, 0x1b, 0xef, 0x68, 0x64, 0x99, 0x0d, 0xb6, 0xce,
+								0x98, 0x06, 0xf6, 0x6b, 0x79, 0x70, 0xfd, 0xff, 0x86, 0x17, 0x18, 0x7b, 0xb9, 0xff, 0xfd, 0xff,
+								0x5a, 0xe4, 0xdf, 0x3e, 0xdb, 0xd5, 0xd3, 0x5e, 0x5b, 0x4f, 0x09, 0x02, 0x0d, 0xb0, 0x3e, 0xab,
+								0x1e, 0x03, 0x1d, 0xda, 0x2f, 0xbe, 0x03, 0xd1, 0x79, 0x21, 0x70, 0xa0, 0xf3, 0x00, 0x9c, 0xee };
+			uint8_t iv[16] = { 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };
+			uint8_t out[64] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
+								0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c, 0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf, 0x8e, 0x51,
+								0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
+								0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10 };
+
+			PAES::GPU_OPT::decrypt_ctr(AESType::AES128, key128, iv, out, 16);
+			if (0 == memcmp((char*)out, (char*)in128, 16)) {
+				printf("\tCTR AES128 Decrypt Passed!\n");
+			}
+			else {
+				printf("\tCTR AES128 Decrypt Failed!\n");
+				ret = -1;
+			}
+		}
+		// Test AES192 Decrypt
+		{
+			uint8_t key192[24] = { 0x8e, 0x73, 0xb0, 0xf7, 0xda, 0x0e, 0x64, 0x52, 0xc8, 0x10, 0xf3, 0x2b, 0x80, 0x90, 0x79, 0xe5,
+								0x62, 0xf8, 0xea, 0xd2, 0x52, 0x2c, 0x6b, 0x7b };
+			uint8_t in192[64] = { 0x1a, 0xbc, 0x93, 0x24, 0x17, 0x52, 0x1c, 0xa2, 0x4f, 0x2b, 0x04, 0x59, 0xfe, 0x7e, 0x6e, 0x0b,
+								0x09, 0x03, 0x39, 0xec, 0x0a, 0xa6, 0xfa, 0xef, 0xd5, 0xcc, 0xc2, 0xc6, 0xf4, 0xce, 0x8e, 0x94,
+								0x1e, 0x36, 0xb2, 0x6b, 0xd1, 0xeb, 0xc6, 0x70, 0xd1, 0xbd, 0x1d, 0x66, 0x56, 0x20, 0xab, 0xf7,
+								0x4f, 0x78, 0xa7, 0xf6, 0xd2, 0x98, 0x09, 0x58, 0x5a, 0x97, 0xda, 0xec, 0x58, 0xc6, 0xb0, 0x50 };
+			uint8_t iv[16] = { 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };
+			uint8_t out[64] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
+								0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c, 0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf, 0x8e, 0x51,
+								0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
+								0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10 };
+
+			PAES::GPU_OPT::decrypt_ctr(AESType::AES192, key192, iv, out, 16);
+			if (0 == memcmp((char*)out, (char*)in192, 16)) {
+				printf("\tCTR AES192 Decrypt Passed!\n");
+			}
+			else {
+				printf("\tCTR AES192 Decrypt Failed!\n");
+				ret = -1;
+			}
+		}
+		// Test AES256 Decrypt
+		{
+			uint8_t key256[32] = { 0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
+					0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4 };
+			uint8_t in256[64] = { 0x60, 0x1e, 0xc3, 0x13, 0x77, 0x57, 0x89, 0xa5, 0xb7, 0xa7, 0xf5, 0x04, 0xbb, 0xf3, 0xd2, 0x28,
+								0xf4, 0x43, 0xe3, 0xca, 0x4d, 0x62, 0xb5, 0x9a, 0xca, 0x84, 0xe9, 0x90, 0xca, 0xca, 0xf5, 0xc5,
+								0x2b, 0x09, 0x30, 0xda, 0xa2, 0x3d, 0xe9, 0x4c, 0xe8, 0x70, 0x17, 0xba, 0x2d, 0x84, 0x98, 0x8d,
+								0xdf, 0xc9, 0xc5, 0x8d, 0xb6, 0x7a, 0xad, 0xa6, 0x13, 0xc2, 0xdd, 0x08, 0x45, 0x79, 0x41, 0xa6 };
+			uint8_t iv[16] = { 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };
+			uint8_t out[64] = { 0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
+								0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c, 0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf, 0x8e, 0x51,
+								0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
+								0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10 };
+
+			PAES::GPU_OPT::decrypt_ctr(AESType::AES256, key256, iv, out, 16);
+			if (0 == memcmp((char*)out, (char*)in256, 16)) {
+				printf("\tCTR AES256 Decrypt Passed!\n");
+			}
+			else {
+				printf("\tCTR AES256 Decrypt Failed!\n");
+				ret = -1;
+			}
+		}
+	}
+
+	return ret;
 }
 
-AESType get_mode(std::string s)
+
+// Nice find from @mbeckler (https://www.mbeckler.org/blog/?p=114)
+void pretty_bytes(char* buf, int bytes)
 {
-	if(std::string("AES128") == s) {
-		return AESType::AES128;
+	const char* suffixes[7];
+	suffixes[0] = "B";
+	suffixes[1] = "KB";
+	suffixes[2] = "MB";
+	suffixes[3] = "GB";
+	suffixes[4] = "TB";
+	suffixes[5] = "PB";
+	suffixes[6] = "EB";
+	int s = 0; // which suffix to use
+	double count = bytes;
+	while (count >= 1024 && s < 7)
+	{
+		s++;
+		count /= 1024;
 	}
-
-	if (std::string("AES192") == s) {
-		return AESType::AES192;
-	}
-
-	if (std::string("AES256") == s) {
-		return AESType::AES256;
-	}
-
-	return AESType::Invalid;
+	if (count - floor(count) == 0.0)
+		sprintf(buf, "%d %s", (int)count, suffixes[s]);
+	else
+		sprintf(buf, "%.1f %s", count, suffixes[s]);
 }
 
-void run_performance_test(int data_size) {
+// From https://stackoverflow.com/questions/3407012/c-rounding-up-to-the-nearest-multiple-of-a-number/9194117
+int roundUp(int numToRound, int multiple)
+{
+	return ((numToRound + multiple - 1) / multiple) * multiple;
+}
+
+void run_performance_test_cpu(int data_size) {
+	const int AVG_RUNS = 5;
+	float enc_ms = 0.0;
+	float dec_ms = 0.0;
 	auto& cputimer = CPU::timer();
-	auto& gputimer = GPU::timer();
+	auto& naivegputimer = GPU_NAIVE::timer();
+	auto& optgputimer = GPU_OPT::timer();
 	uint8_t* data = (uint8_t*)malloc(data_size);
-	uint32_t dataLen = data_size;
+	uint32_t dataLen = roundUp(data_size, 16);
 
 	for (int i = 0; i < dataLen; i++) {
 		data[i] = i;
@@ -643,65 +902,293 @@ void run_performance_test(int data_size) {
 		0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff};
 
 	////////////////////////////////////////////////////////////////////////////
-	// ECB on CPU
+	// ECB on CPU 
 	std::cout << "Running AES128 ECB on CPU...";
-	CPU::encrypt_ecb(AESType::AES128, key, data, dataLen);
-	std::cout << "\tTook " << cputimer.getCpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+	for (int i = 0; i < AVG_RUNS; i++) {
+		CPU::encrypt_ecb(AESType::AES128, key, data, dataLen);
+		enc_ms += cputimer.getCpuElapsedTimeForPreviousOperation();
+		CPU::decrypt_ecb(AESType::AES128, key, data, dataLen);
+		dec_ms += cputimer.getCpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
 
 	std::cout << "Running AES192 ECB on CPU...";
-	CPU::encrypt_ecb(AESType::AES192, key, data, dataLen);
-	std::cout << "\tTook " << cputimer.getCpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+	for (int i = 0; i < AVG_RUNS; i++) {
+		CPU::encrypt_ecb(AESType::AES192, key, data, dataLen);
+		enc_ms += cputimer.getCpuElapsedTimeForPreviousOperation();
+		CPU::decrypt_ecb(AESType::AES192, key, data, dataLen);
+		dec_ms += cputimer.getCpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
 
 	std::cout << "Running AES256 ECB on CPU...";
-	CPU::encrypt_ecb(AESType::AES256, key, data, dataLen);
-	std::cout << "\tTook " << cputimer.getCpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
-
-	/////////////////////////////////////////////////////////////////////////////
-	// ECB on GPU
-	std::cout << "Running AES128 ECB on GPU...";
-	GPU::encrypt_ecb(AESType::AES128, key, data, dataLen);
-	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
-
-	std::cout << "Running AES192 ECB on GPU...";
-	GPU::encrypt_ecb(AESType::AES192, key, data, dataLen);
-	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
-
-	std::cout << "Running AES256 ECB on GPU...";
-	GPU::encrypt_ecb(AESType::AES256, key, data, dataLen);
-	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
-
+	for (int i = 0; i < AVG_RUNS; i++) {
+		CPU::encrypt_ecb(AESType::AES256, key, data, dataLen);
+		enc_ms += cputimer.getCpuElapsedTimeForPreviousOperation();
+		CPU::decrypt_ecb(AESType::AES256, key, data, dataLen);
+		dec_ms += cputimer.getCpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
 
 	////////////////////////////////////////////////////////////////////////////
 	// CTR on CPU
 	std::cout << "Running AES128 CTR on CPU...";
-	CPU::encrypt_ctr(AESType::AES128, key, iv, data, dataLen);
-	std::cout << "\tTook " << cputimer.getCpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+	for (int i = 0; i < AVG_RUNS; i++) {
+		CPU::encrypt_ctr(AESType::AES128, key, iv, data, dataLen);
+		enc_ms += cputimer.getCpuElapsedTimeForPreviousOperation();
+		CPU::decrypt_ctr(AESType::AES128, key, iv, data, dataLen);
+		dec_ms += cputimer.getCpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
 
 	std::cout << "Running AES192 CTR on CPU...";
-	CPU::encrypt_ctr(AESType::AES192, key, iv, data, dataLen);
-	std::cout << "\tTook " << cputimer.getCpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+	for (int i = 0; i < AVG_RUNS; i++) {
+		CPU::encrypt_ctr(AESType::AES192, key, iv, data, dataLen);
+		enc_ms += cputimer.getCpuElapsedTimeForPreviousOperation();
+		CPU::decrypt_ctr(AESType::AES192, key, iv, data, dataLen);
+		dec_ms += cputimer.getCpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
 
 	std::cout << "Running AES256 CTR on CPU...";
-	CPU::encrypt_ctr(AESType::AES256, key, iv, data, dataLen);
-	std::cout << "\tTook " << cputimer.getCpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+	for (int i = 0; i < AVG_RUNS; i++) {
+		CPU::encrypt_ctr(AESType::AES256, key, iv, data, dataLen);
+		enc_ms += cputimer.getCpuElapsedTimeForPreviousOperation();
+		CPU::decrypt_ctr(AESType::AES256, key, iv, data, dataLen);
+		dec_ms += cputimer.getCpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
+}
+
+void run_performance_test_gpu_naive(int data_size) {
+	const int AVG_RUNS = 5;
+	float enc_ms = 0.0;
+	float dec_ms = 0.0;
+	auto& cputimer = CPU::timer();
+	auto& naivegputimer = GPU_NAIVE::timer();
+	auto& optgputimer = GPU_OPT::timer();
+	uint8_t* data = (uint8_t*)malloc(data_size);
+	uint32_t dataLen = roundUp(data_size, 16);
+
+	for (int i = 0; i < dataLen; i++) {
+		data[i] = i;
+	}
+
+	// Use some bogus key. We can use this 256 sized key and just truncate for smaller modes.
+	uint8_t key[32] = {
+		0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
+		0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4 };
+	uint8_t iv[16] = {
+		0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };
+
+	/////////////////////////////////////////////////////////////////////////////
+	// ECB on GPU Naive
+	std::cout << "Running AES128 ECB on GPU Naive...";
+	for (int i = 0; i < AVG_RUNS; i++) {
+		GPU_NAIVE::encrypt_ecb(AESType::AES128, key, data, dataLen);
+		enc_ms += naivegputimer.getGpuElapsedTimeForPreviousOperation();
+		GPU_NAIVE::decrypt_ecb(AESType::AES128, key, data, dataLen);
+		dec_ms += naivegputimer.getGpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
+
+	std::cout << "Running AES192 ECB on GPU Naive...";
+	for (int i = 0; i < AVG_RUNS; i++) {
+		GPU_NAIVE::encrypt_ecb(AESType::AES192, key, data, dataLen);
+		enc_ms += naivegputimer.getGpuElapsedTimeForPreviousOperation();
+		GPU_NAIVE::decrypt_ecb(AESType::AES192, key, data, dataLen);
+		dec_ms += naivegputimer.getGpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
+
+	std::cout << "Running AES256 ECB on GPU Naive...";
+	for (int i = 0; i < AVG_RUNS; i++) {
+		GPU_NAIVE::encrypt_ecb(AESType::AES256, key, data, dataLen);
+		enc_ms += naivegputimer.getGpuElapsedTimeForPreviousOperation();
+		GPU_NAIVE::decrypt_ecb(AESType::AES256, key, data, dataLen);
+		dec_ms += naivegputimer.getGpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
 
 	////////////////////////////////////////////////////////////////////////////
-	// CTR on GPU
-	std::cout << "Running AES128 CTR on GPU...";
-	GPU::encrypt_ctr(AESType::AES128, key, iv, data, dataLen);
-	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+	// CTR on GPU Naive
+	std::cout << "Running AES128 CTR on GPU Naive...";
+	for (int i = 0; i < AVG_RUNS; i++) {
+		GPU_NAIVE::encrypt_ctr(AESType::AES128, key, iv, data, dataLen);
+		enc_ms += naivegputimer.getGpuElapsedTimeForPreviousOperation();
+		GPU_NAIVE::decrypt_ctr(AESType::AES128, key, iv, data, dataLen);
+		dec_ms += naivegputimer.getGpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
 
-	std::cout << "Running AES192 CTR on GPU...";
-	GPU::encrypt_ctr(AESType::AES192, key, iv, data, dataLen);
-	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+	std::cout << "Running AES192 CTR on GPU Naive...";
+	for (int i = 0; i < AVG_RUNS; i++) {
+		GPU_NAIVE::encrypt_ctr(AESType::AES192, key, iv, data, dataLen);
+		enc_ms += naivegputimer.getGpuElapsedTimeForPreviousOperation();
+		GPU_NAIVE::decrypt_ctr(AESType::AES192, key, iv, data, dataLen);
+		dec_ms += naivegputimer.getGpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
 
-	std::cout << "Running AES256 CTR on GPU...";
-	GPU::encrypt_ctr(AESType::AES256, key, iv, data, dataLen);
-	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
+	std::cout << "Running AES256 CTR on GPU Naive...";
+	for (int i = 0; i < AVG_RUNS; i++) {
+		GPU_NAIVE::encrypt_ctr(AESType::AES256, key, iv, data, dataLen);
+		enc_ms += naivegputimer.getGpuElapsedTimeForPreviousOperation();
+		GPU_NAIVE::decrypt_ctr(AESType::AES256, key, iv, data, dataLen);
+		dec_ms += naivegputimer.getGpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
 
-	//for (int i = 0; i < 25; i++) {
-	//	std::cout << "Running AES256 ECB on GPU...";
-	//	GPU::encrypt_ecb(AESType::AES256, key, data, dataLen);
-	//	std::cout << "\tTook " << gputimer.getGpuElapsedTimeForPreviousOperation() << " ms" << std::endl;
-	//}
+}
+
+void run_performance_test_gpu_opt(int data_size) {
+	const int AVG_RUNS = 5;
+	float enc_ms = 0.0;
+	float dec_ms = 0.0;
+	auto& cputimer = CPU::timer();
+	auto& naivegputimer = GPU_NAIVE::timer();
+	auto& optgputimer = GPU_OPT::timer();
+	uint8_t* data = (uint8_t*)malloc(data_size);
+	uint32_t dataLen = roundUp(data_size, 16);
+
+	for (int i = 0; i < dataLen; i++) {
+		data[i] = i;
+	}
+
+	// Use some bogus key. We can use this 256 sized key and just truncate for smaller modes.
+	uint8_t key[32] = {
+		0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
+		0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4 };
+	uint8_t iv[16] = {
+		0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff };
+
+	/////////////////////////////////////////////////////////////////////////////
+	// ECB on GPU Optimized
+	std::cout << "Running AES128 ECB on GPU Optimized...";
+	for (int i = 0; i < AVG_RUNS; i++) {
+		GPU_OPT::encrypt_ecb(AESType::AES128, key, data, dataLen);
+		enc_ms += optgputimer.getGpuElapsedTimeForPreviousOperation();
+		GPU_OPT::decrypt_ecb(AESType::AES128, key, data, dataLen);
+		dec_ms += optgputimer.getGpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
+
+	std::cout << "Running AES192 ECB on GPU Optimized...";
+	for (int i = 0; i < AVG_RUNS; i++) {
+		GPU_OPT::encrypt_ecb(AESType::AES192, key, data, dataLen);
+		enc_ms += optgputimer.getGpuElapsedTimeForPreviousOperation();
+		GPU_OPT::decrypt_ecb(AESType::AES192, key, data, dataLen);
+		dec_ms += optgputimer.getGpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
+
+	std::cout << "Running AES256 ECB on GPU Optimized...";
+	for (int i = 0; i < AVG_RUNS; i++) {
+		GPU_OPT::encrypt_ecb(AESType::AES256, key, data, dataLen);
+		enc_ms += optgputimer.getGpuElapsedTimeForPreviousOperation();
+		GPU_OPT::decrypt_ecb(AESType::AES256, key, data, dataLen);
+		dec_ms += optgputimer.getGpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
+
+	////////////////////////////////////////////////////////////////////////////
+	// CTR on GPU Optimized
+	std::cout << "Running AES128 CTR on GPU Optimized...";
+	for (int i = 0; i < AVG_RUNS; i++) {
+		GPU_OPT::encrypt_ctr(AESType::AES128, key, iv, data, dataLen);
+		enc_ms += optgputimer.getGpuElapsedTimeForPreviousOperation();
+		GPU_OPT::decrypt_ctr(AESType::AES128, key, iv, data, dataLen);
+		dec_ms += optgputimer.getGpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
+
+	std::cout << "Running AES192 CTR on GPU Optimized...";
+	for (int i = 0; i < AVG_RUNS; i++) {
+		GPU_OPT::encrypt_ctr(AESType::AES192, key, iv, data, dataLen);
+		enc_ms += optgputimer.getGpuElapsedTimeForPreviousOperation();
+		GPU_OPT::decrypt_ctr(AESType::AES192, key, iv, data, dataLen);
+		dec_ms += optgputimer.getGpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
+
+	std::cout << "Running AES256 CTR on GPU Optimized...";
+	for (int i = 0; i < AVG_RUNS; i++) {
+		GPU_OPT::encrypt_ctr(AESType::AES256, key, iv, data, dataLen);
+		enc_ms += optgputimer.getGpuElapsedTimeForPreviousOperation();
+		GPU_OPT::decrypt_ctr(AESType::AES256, key, iv, data, dataLen);
+		dec_ms += optgputimer.getGpuElapsedTimeForPreviousOperation();
+	}
+	enc_ms /= AVG_RUNS;
+	dec_ms /= AVG_RUNS;
+	std::cout << "\tEncrypt: " << enc_ms << " ms\tDecrypt: " << dec_ms << " ms" << std::endl;
+	enc_ms = 0;
+	dec_ms = 0;
 }

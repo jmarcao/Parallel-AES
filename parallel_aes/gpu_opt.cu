@@ -4,7 +4,7 @@
 #include <bitset>
 #include <assert.h>
 #include "common.h"
-#include "gpu.h"
+#include "gpu_opt.h"
 
 #define N_COLS 4
 #define N_ROWS 4
@@ -19,10 +19,10 @@
 #ifdef OPTIMIZED
 #undef OPTIMIZED
 #endif
-#define OPTIMIZED 0
+#define OPTIMIZED 1
 
 namespace PAES {
-    namespace GPU_NAIVE {
+    namespace GPU_OPT {
         using PAES::Common::PerformanceTimer;
         PerformanceTimer& timer()
         {
@@ -329,7 +329,7 @@ namespace PAES {
 			__syncthreads();
 
 			// Each thread running this function will act on ONE block in memory.
-#if OPTIMIZED == 0 // Get a pointer to global mem
+#if 0 // Get a pointer to global mem
 			uint8_t* myData = data + idx * BLOCKSIZE;
 #else // Copy into local mem
 			uint8_t myData[BLOCKSIZE];
@@ -368,7 +368,7 @@ namespace PAES {
 			add_round_key(idx, num_rounds, myData, key);
 
 			// Encryption on this block is done, encrypted data is stored inplace.
-#if OPTIMIZED == 1 // If copied into local mem above, need to write it back down
+#if 1 // If copied into local mem above, need to write it back down
 			((uint32_t*)data)[idx*(BLOCKSIZE / 4) + 0] = ((uint32_t*)myData)[0];
 			((uint32_t*)data)[idx*(BLOCKSIZE / 4) + 1] = ((uint32_t*)myData)[1];
 			((uint32_t*)data)[idx*(BLOCKSIZE / 4) + 2] = ((uint32_t*)myData)[2];
@@ -446,7 +446,7 @@ namespace PAES {
 			add_round_key(idx, 0, myData, key);
 
 			// Decryption on this block is done, decrypted data is stored inplace.
-#if OPTIMIZED == 1 // If copied into local mem above, need to write it back down
+#if 1 // If copied into local mem above, need to write it back down
 			((uint32_t*)data)[idx*(BLOCKSIZE / 4) + 0] = ((uint32_t*)myData)[0];
 			((uint32_t*)data)[idx*(BLOCKSIZE / 4) + 1] = ((uint32_t*)myData)[1];
 			((uint32_t*)data)[idx*(BLOCKSIZE / 4) + 2] = ((uint32_t*)myData)[2];
@@ -558,7 +558,7 @@ namespace PAES {
 			// Matrix representations will be helpful later on, 
 			// but this is clearer to me. We can easily parallelize this
 #if OPTIMIZED == 0 // loop on 8bits
-			for (uint8_t i = 0; i < 16; i++)
+			for (uint8_t i = 0; i < 4; i++)
 			{
 				data[i] ^= key[(round * SUBKEY_SIZE) + i];
 			}
@@ -713,8 +713,6 @@ namespace PAES {
 				data[idx2] = d0 ^ d1       ^ mul2[d2] ^ mul3[d3];
 				data[idx3] = mul3[d0] ^ d1       ^ d2       ^ mul2[d3];
 #else // 32bit RW
-				uint8_t base = i * N_COLS;
-
 				// One 32bit read from global
 				uint32_t quarterblock = ((uint32_t*)data)[i];
 
@@ -774,6 +772,8 @@ namespace PAES {
 				data[idx1] = mul9[d0] ^ mulE[d1] ^ mulB[d2] ^ mulD[d3];
 				data[idx2] = mulD[d0] ^ mul9[d1] ^ mulE[d2] ^ mulB[d3];
 				data[idx3] = mulB[d0] ^ mulD[d1] ^ mul9[d2] ^ mulE[d3];
+
+				uint8_t base = i * N_COLS;
 #else // 32bit RW
 				// One 32bit read from global
 				uint32_t quarterblock = ((uint32_t*)data)[i];

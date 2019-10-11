@@ -5,6 +5,8 @@ set(SOURCE_FILES
     "cpu.cu"
     "gpu.h"
     "gpu.cu"
+	"gpu_opt.h"
+	"gpu_opt.cu"
     )
 
 cuda_add_library(parallel_aes
