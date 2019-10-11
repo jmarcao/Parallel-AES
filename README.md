@@ -123,20 +123,20 @@ uint32_t c3 = ((uint32_t*)data)[3];
 
 My last optimization came way too late. I realized that accesses to each threads block data was going all the way out to global memory. This was useless, since no other thread would read or write to that memory. I added a copy of the 16byte block from global to thread-local memory and then performance SOARED. This makes sense, obviously. After moving all my data to thread local or SM local memory, my access to Global space was nearly zero. According to NSight, i read a total of 64MB (the actual block data, required) from Device Memory and wrote all of it back (save the data read for lookup tables). As can be seen below, memory read from the device and global memory dropped significantly. This ended up being the largest optimization, increasing memory throughput +1,327% from the unoptimized implementation.
 
-![](img\memory_access_opt_vs_unopt.JPG)
+![](img/memory_access_opt_vs_unopt.JPG)
 
 # Algorithm Results
 I implemented a performance test mode in my application to easily compare each algorithm's throughput. The tester runs each algorithm 5 times and averages the result. The validity of the results are not checked in the performance tester, though that can be done through the '-t' option.
 
-![](img\example_performance_output.JPG)
+![](img/example_performance_output.JPG)
 
 I ran the tester over several test buffer sizes to see how each stacks up against the other.
 
-![](img\pchart_cpu.png)
+![](img/pchart_cpu.png)
 
 Looking at the chart, the CPU implementations become far too slow after 5MB of data. Now, far too slow is relative to the GPU implementations, but from that point on the CPU is removed from the graph. Beyond 50MB CPU data is no longer collected due to the time ti takes to process the data, the next step being 500MB. We can start to see here that the three variants of AES do have some impact, but not significantly. The main difference between AES128, AES192, and AES256 in the implementation is how many rounds are needed (10, 12, and 14 respectively). If each round is optimized, then the difference between them is never really seen.
 
-![](img\pchart_gpu_enc.png)
+![](img/pchart_gpu_enc.png)
 
 In this chart I have zoomed in closer to the GPU data. We can see here even more that the different variations of AES indeed slower, but not by a huge margin. We do see though that the unoptimized implementations perform worse than the optimized.
 
@@ -148,7 +148,7 @@ In this chart I have zoomed in closer to the GPU data. We can see here even more
 
 One thing to notice here is that I am only comparing the ECB implementations. One benefit of the CTR mode implementation is that, even unoptimized, it is very fast. Because each CUDA thread only needs to read the counter value from global memory, and every thread does this at the same time, the value is quickly cached and made available to every kernel. Once the counter is incremented and encrypted, it is XOR'd directly into the global memory space. Each thread is written to a separate block in global space, so there are no contentions to worry about. Because of this, even when unoptimized, the CTR mode performs very well. In fact, the optimized version performs worse! I am not sure why this is the case, but I imagine that, with all the operations being done locally in the thread, there are some compiler tricks the NVCC tool is performing that I am unaware of.
 
-![](img\pchart_ctr.png)
+![](img/pchart_ctr.png)
 
 # Summary
 Doing this project really introduced me to the useful features of the NSight profiler, as well as how to identify and fix issues performance issues in CUDA code. I did find the profiler lacking compared to some legacy tools, but unfortunately my GPU is not compatible with legacy Nvidia tools. I found out how algorithms can be molded and adapted for parallel execution and what unique challenges need to be solved there. I found that having a deeper knowledge of AES helped greatly, since I was able to find shortcuts in the implementation.
