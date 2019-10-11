@@ -610,7 +610,9 @@ namespace PAES {
 			// row0 -- No Shift
 			// rows 1 to 3, shift left by row ammount
 
-#if OPTIMIZED == 0 // 12 8bit reads / 12 8bit writes
+#if OPTIMIZED == 0 
+			
+			// 12 8bit reads / 12 8bit writes
 			uint8_t tmp[4];
 			for (int row = 1; row < N_ROWS; row++) {
 				tmp[0] = data[row + N_COLS * 0];
@@ -622,6 +624,8 @@ namespace PAES {
 				data[row + N_COLS * 2] = tmp[mod4(2 + row)];
 				data[row + N_COLS * 3] = tmp[mod4(3 + row)];
 			}
+
+
 #else // Unrolled 4 32bit reads 4 32bit writes + some math
 			// Read our whole block in...
 			uint32_t c0 = ((uint32_t*)data)[0];

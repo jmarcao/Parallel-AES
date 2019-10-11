@@ -39,7 +39,7 @@ int main(int argc, char* argv[]) {
 		options.add_options()
 			("t,test", "Test Mode, runs all normal test")
 			("p,performance-test", "Performance test mode, runs input file against all encryption methods. Argument is size of bytes. Default 16MB.",
-				cxxopts::value<int>()->default_value("16777216"))
+				cxxopts::value<int>()->default_value("16777216")->implicit_value("16777216"))
 			("c,always-run-cpu", "Always run CPU tests for Performance test, even if asking over 64MB")
 			("h,help", "Shows help");
 
