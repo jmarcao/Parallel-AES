@@ -1,0 +1,72 @@
+{
+    "extension": "nsight-cuproj",
+    "files": [
+        {
+            "is_open": true,
+            "path": "../with_shared_memory.nsight-cuprof-report"
+        },
+        {
+            "path": "../with_mix_cols_32.nsight-cuprof-report"
+        },
+        {
+            "path": "../with_mix_cols_shift_rows_32.nsight-cuprof-report"
+        },
+        {
+            "path": "../with_32_everything.nsight-cuprof-report"
+        },
+        {
+            "is_open": true,
+            "path": "../runtime_compute.nsight-cuprof-report"
+        },
+        {
+            "is_open": true,
+            "path": "../without_shared_memory.nsight-cuprof-report"
+        }
+    ],
+    "launcher": {
+        "activity/interactiveprofile/clockcontrol": "Base",
+        "activity/interactiveprofile/disableprofilingstartstop": false,
+        "activity/interactiveprofile/enablenvtxsupport": false,
+        "activity/interactiveprofile/enableprofilingfromstart": true,
+        "activity/profile/applyrules": true,
+        "activity/profile/clockcontrol": "Base",
+        "activity/profile/disableprofilingstartstop": false,
+        "activity/profile/enablenvtxsupport": false,
+        "activity/profile/enableprofilingfromstart": true,
+        "activity/profile/forceoverwrite": true,
+        "activity/profile/kernelid": "",
+        "activity/profile/kernelregex": "",
+        "activity/profile/kernelregexbase": "Function",
+        "activity/profile/launchcapturecount": "0",
+        "activity/profile/launchskipbeforematchcount": "0",
+        "activity/profile/launchskipcount": "0",
+        "activity/profile/metrics": "",
+        "activity/profile/nvtxincludeexcludeoptions": "",
+        "activity/profile/outputfile": "",
+        "activity/profile/samplingBufferSize": "33554432",
+        "activity/profile/samplingInterval": "5",
+        "activity/profile/samplingIntervalAuto": true,
+        "activity/profile/samplingMaxPasses": "5",
+        "activity/profile/targetprocesses": "Application Only",
+        "platform/linux (x86_64)/device": "",
+        "platform/linux/arguments": "",
+        "platform/linux/autoconnect": true,
+        "platform/linux/environment": "",
+        "platform/linux/executable": "",
+        "platform/linux/workingdir": "",
+        "platform/win32/arguments": "-p",
+        "platform/win32/arguments/history": [
+            "-p"
+        ],
+        "platform/win32/autoconnect": true,
+        "platform/win32/environment": "",
+        "platform/win32/executable": "C:/Users/John/git/Parallel-AES/build/Release/cis565_parallel_aes.exe",
+        "platform/win32/executable/history": [
+            "C:/Users/John/git/Parallel-AES/build/Release/cis565_parallel_aes.exe"
+        ],
+        "platform/win32/workingdir": "",
+        "platform/windows/device": "localhost"
+    },
+    "uuid": "{784a4f86-1f5f-4e08-bbda-89bc98a8795e}",
+    "version": "1.0"
+}
